@@ -1,0 +1,12 @@
+node_modules
+.next
+dist
+coverage
+.env
+*.log
+.turbo
+storybook-static
+test-results
+playwright-report
+bin/
+.DS_Store

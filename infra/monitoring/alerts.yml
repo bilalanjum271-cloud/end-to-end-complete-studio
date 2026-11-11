@@ -1,0 +1,33 @@
+groups:
+  - name: xen-studio-phase1
+    rules:
+      - alert: HighErrorRate
+        expr: sum by (service) (rate(http_requests_total{status=~"5.."}[5m])) / sum by (service) (rate(http_requests_total[5m])) > 0.02
+        for: 5m
+        labels: { severity: page }
+        annotations: { summary: "{{ $labels.service }} 5xx rate above 2%", runbook: "docs/runbooks/incident.md" }
+      - alert: SlowRequests
+        expr: histogram_quantile(0.99, sum by (le, service) (rate(http_request_duration_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels: { severity: ticket }
+        annotations: { summary: "{{ $labels.service }} p99 latency above 1s" }
+      - alert: GatewayShedding
+        expr: sum(rate(gateway_shed_total[5m])) > 1
+        for: 5m
+        labels: { severity: page }
+        annotations: { summary: "Gateway is shedding load; the cell is at capacity", runbook: "docs/runbooks/incident.md#overload" }
+      - alert: UpstreamBreakerOpen
+        expr: sum by (upstream) (rate(gateway_breaker_rejected_total[2m])) > 0
+        for: 2m
+        labels: { severity: page }
+        annotations: { summary: "Circuit breaker open for {{ $labels.upstream }}" }
+      - alert: RateLimiterDegraded
+        expr: rate(gateway_ratelimit_degraded_total[5m]) > 0
+        for: 5m
+        labels: { severity: ticket }
+        annotations: { summary: "Redis unreachable; rate limits are per-pod instead of global" }
+      - alert: ServiceDown
+        expr: up == 0
+        for: 2m
+        labels: { severity: page }
+        annotations: { summary: "{{ $labels.job }} is down" }

@@ -1,0 +1,88 @@
+/* Maps the design tokens onto Tailwind v4 utilities. Import after "tailwindcss". */
+@import './tokens.css';
+
+@theme inline {
+  --color-bg: var(--xs-bg);
+  --color-surface-1: var(--xs-surface-1);
+  --color-surface-2: var(--xs-surface-2);
+  --color-surface-3: var(--xs-surface-3);
+  --color-line: var(--xs-line);
+  --color-line-strong: var(--xs-line-strong);
+  --color-fg: var(--xs-fg);
+  --color-fg-muted: var(--xs-fg-muted);
+  --color-fg-subtle: var(--xs-fg-subtle);
+  --color-accent: var(--xs-accent);
+  --color-accent-hover: var(--xs-accent-hover);
+  --color-accent-fg: var(--xs-accent-fg);
+  --color-accent-soft: var(--xs-accent-soft);
+  --color-accent-text: var(--xs-accent-text);
+  --color-success: var(--xs-success);
+  --color-warning: var(--xs-warning);
+  --color-danger: var(--xs-danger);
+  --color-danger-soft: var(--xs-danger-soft);
+  --color-info: var(--xs-info);
+  --color-overlay: var(--xs-overlay);
+  --color-focus: var(--xs-focus);
+
+  --font-sans: var(--xs-font-sans);
+  --font-mono: var(--xs-font-mono);
+
+  --text-xs: var(--xs-text-xs);
+  --text-sm: var(--xs-text-sm);
+  --text-base: var(--xs-text-base);
+  --text-md: var(--xs-text-md);
+  --text-lg: var(--xs-text-lg);
+  --text-xl: var(--xs-text-xl);
+  --text-2xl: var(--xs-text-2xl);
+  --text-3xl: var(--xs-text-3xl);
+
+  --radius-sm: var(--xs-radius-sm);
+  --radius-md: var(--xs-radius-md);
+  --radius-lg: var(--xs-radius-lg);
+  --radius-xl: var(--xs-radius-xl);
+
+  --shadow-1: var(--xs-shadow-1);
+  --shadow-2: var(--xs-shadow-2);
+  --shadow-3: var(--xs-shadow-3);
+
+  --ease-xs: var(--xs-ease);
+  --animate-fade-in: xs-fade-in var(--xs-duration-base) var(--xs-ease);
+  --animate-pop-in: xs-pop-in var(--xs-duration-base) var(--xs-ease);
+  --animate-slide-in: xs-slide-in var(--xs-duration-slow) var(--xs-ease);
+  --animate-shimmer: xs-shimmer 1.6s linear infinite;
+}
+
+@keyframes xs-fade-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes xs-pop-in { from { opacity: 0; transform: translateY(4px) scale(0.98) } to { opacity: 1; transform: none } }
+@keyframes xs-slide-in { from { transform: translateX(var(--xs-slide-from, 100%)) } to { transform: none } }
+@keyframes xs-shimmer { from { background-position: 200% 0 } to { background-position: -200% 0 } }
+
+@layer base {
+  html { font-family: var(--xs-font-sans); font-size: 16px; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  body { background: var(--xs-bg); color: var(--xs-fg); font-size: var(--xs-text-base); line-height: 1.5; }
+  :focus-visible { outline: 2px solid var(--xs-focus); outline-offset: 2px; border-radius: var(--xs-radius-sm); }
+  ::selection { background: var(--xs-accent-soft); }
+  [dir='rtl'] { --xs-slide-from: -100%; }
+}
+
+/* The one signature treatment in the product: the main generate action. */
+@layer components {
+  .xs-generate {
+    position: relative;
+    isolation: isolate;
+    background: var(--xs-accent);
+    color: var(--xs-accent-fg);
+    box-shadow: 0 0 0 1px rgb(255 255 255 / 0.12) inset, 0 8px 24px -8px var(--xs-accent);
+  }
+  .xs-generate::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background: linear-gradient(110deg, transparent 30%, rgb(255 255 255 / 0.35) 50%, transparent 70%);
+    background-size: 200% 100%;
+    animation: xs-shimmer 2.8s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) { .xs-generate::before { animation: none; opacity: 0; } }
+}

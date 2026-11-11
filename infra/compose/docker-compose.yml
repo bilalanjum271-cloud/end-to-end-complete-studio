@@ -1,0 +1,100 @@
+# Local infrastructure for one Xen Studio cell. Application services run on the host
+# via `node scripts/dev.mjs` (fast rebuilds); see README.md.
+#   docker compose -f infra/compose/docker-compose.yml up -d
+name: xen-studio
+services:
+  cockroach:                       # distributed SQL (PostgreSQL wire)
+    image: cockroachdb/cockroach:v24.3.5
+    command: start-single-node --insecure --http-addr=0.0.0.0:8088
+    ports: ["26257:26257", "8088:8088"]
+    volumes: [cockroach:/cockroach/cockroach-data]
+    healthcheck: { test: ["CMD", "curl", "-f", "http://localhost:8088/health?ready=1"], interval: 5s, retries: 20 }
+  cockroach-init:
+    image: cockroachdb/cockroach:v24.3.5
+    depends_on: { cockroach: { condition: service_healthy } }
+    entrypoint: ["/cockroach/cockroach", "sql", "--insecure", "--host=cockroach", "-e", "CREATE DATABASE IF NOT EXISTS xen_studio; CREATE DATABASE IF NOT EXISTS temporal; CREATE DATABASE IF NOT EXISTS temporal_visibility;"]
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports: ["6379:6379"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s }
+
+  scylla:                          # wide-column store for job state, events, notifications (used from Phase 2)
+    image: scylladb/scylla:6.2
+    command: --smp 1 --memory 750M --overprovisioned 1 --developer-mode 1
+    ports: ["9042:9042"]
+    volumes: [scylla:/var/lib/scylla]
+
+  redpanda:                        # Kafka API + schema registry
+    image: redpandadata/redpanda:v24.3.6
+    command:
+      - redpanda start --smp 1 --memory 1G --overprovisioned --node-id 0 --check=false
+      - --kafka-addr internal://0.0.0.0:29092,external://0.0.0.0:9092
+      - --advertise-kafka-addr internal://redpanda:29092,external://localhost:9092
+      - --schema-registry-addr 0.0.0.0:8081
+    ports: ["9092:9092", "8081:8081"]
+    volumes: [redpanda:/var/lib/redpanda/data, ../kafka:/etc/xen-kafka:ro]
+    healthcheck: { test: ["CMD", "rpk", "cluster", "health"], interval: 5s, retries: 20 }
+  redpanda-init:
+    image: redpandadata/redpanda:v24.3.6
+    depends_on: { redpanda: { condition: service_healthy } }
+    volumes: [../kafka:/etc/xen-kafka:ro]
+    environment: { BROKER: "redpanda:29092", REPLICATION: "1" }
+    entrypoint: ["bash", "/etc/xen-kafka/create-topics.sh"]
+
+  temporal:
+    image: temporalio/auto-setup:1.26.2
+    depends_on: { postgres-temporal: { condition: service_healthy } }
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: postgres-temporal
+    ports: ["7233:7233"]
+  postgres-temporal:               # Temporal's own persistence (see DECISIONS.md D-009)
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: temporal, POSTGRES_PASSWORD: temporal }
+    volumes: [temporal:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "temporal"], interval: 5s }
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    depends_on: [temporal]
+    environment: { TEMPORAL_ADDRESS: "temporal:7233" }
+    ports: ["8233:8080"]
+
+  minio:                           # S3-compatible object storage
+    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
+    command: server /data --console-address ":9001"
+    environment: { MINIO_ROOT_USER: xenstudio, MINIO_ROOT_PASSWORD: xenstudio-secret }
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [minio:/data]
+  minio-init:
+    image: minio/mc:RELEASE.2025-02-21T16-00-46Z
+    depends_on: [minio]
+    entrypoint: >
+      /bin/sh -c "until mc alias set local http://minio:9000 xenstudio xenstudio-secret; do sleep 1; done;
+      mc mb -p local/xen-media local/xen-exports local/xen-uploads;
+      mc ilm rule add --transition-days 30 --transition-tier COLD local/xen-media 2>/dev/null || true;
+      mc ilm rule add --expire-days 7 local/xen-uploads"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.119.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes: [../monitoring/otel-collector.yaml:/etc/otel/config.yaml:ro]
+    ports: ["4317:4317", "4318:4318"]
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    volumes: [../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro, ../monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    ports: ["9090:9090"]
+  grafana:
+    image: grafana/grafana:11.5.2
+    environment: { GF_AUTH_ANONYMOUS_ENABLED: "true", GF_AUTH_ANONYMOUS_ORG_ROLE: Admin }
+    volumes:
+      - ../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3001:3000"]
+
+volumes: { cockroach: {}, scylla: {}, redpanda: {}, temporal: {}, minio: {} }

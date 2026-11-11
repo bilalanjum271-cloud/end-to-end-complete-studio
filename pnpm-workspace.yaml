@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - packages/*
+  - services/identity
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - '@nestjs/core'
+  - '@swc/core'
+  - unrs-resolver

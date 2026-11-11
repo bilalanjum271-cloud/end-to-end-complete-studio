@@ -1,0 +1,17 @@
+# Xen Studio Kafka topic catalog (source of truth; applied by infra/kafka/create-topics.sh).
+# Conventions:
+#   name:       xen.<domain>.<entity>.v<schema major>
+#   key:        workspace_id (all events for a workspace stay ordered on one partition)
+#   partitions: local value; production multiplies via PARTITION_FACTOR (see docs/capacity.md, Phase 8)
+#   dlq:        every consumed topic has <name>.dlq; consumers park poison messages after 5 attempts
+#   schemas:    Avro in the schema registry, subject <topic>-value, BACKWARD compatibility
+defaults: { replication: 3, min_insync_replicas: 2, tiered_storage: true, local_retention_hours: 24 }
+topics:
+  - { name: xen.identity.workspace.v1,   partitions: 12, retention_days: 30,  dlq: true,  producer: identity,  note: "workspace.created / plan_changed / member events (outbox)" }
+  - { name: xen.ledger.entry.v1,         partitions: 24, retention_days: 365, dlq: true,  producer: ledger,    note: "every ledger entry; feeds revenue and fraud signals" }
+  - { name: xen.audit.event.v1,          partitions: 12, retention_days: 365, dlq: false, producer: all,       note: "audit log stream to the lakehouse" }
+  - { name: xen.generation.job.v1,       partitions: 48, retention_days: 14,  dlq: true,  producer: studio,    note: "job lifecycle: requested/started/scene_done/succeeded/failed (Phase 2)" }
+  - { name: xen.generation.progress.v1,  partitions: 48, retention_days: 1,   dlq: false, producer: workers,   note: "per-scene progress fan-out to WebSockets (Phase 2)" }
+  - { name: xen.moderation.decision.v1,  partitions: 12, retention_days: 90,  dlq: true,  producer: moderation, note: "prompt and output moderation results (Phase 2)" }
+  - { name: xen.notification.request.v1, partitions: 12, retention_days: 7,   dlq: true,  producer: all,       note: "email / push / in-app requests (Phase 3)" }
+  - { name: xen.analytics.event.v1,      partitions: 96, retention_days: 7,   dlq: false, producer: all,       note: "product events to Flink and the lakehouse (Phase 4)" }

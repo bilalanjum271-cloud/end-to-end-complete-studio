@@ -1,0 +1,83 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+permissions: { contents: read }
+concurrency: { group: "ci-${{ github.ref }}", cancel-in-progress: true }
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: xen_studio_test }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+      redis: { image: "redis:7", ports: ["6379:6379"] }
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/xen_studio_test?sslmode=disable
+      TEST_REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.24" }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: test -z "$(gofmt -l services packages)"
+      - run: go vet ./...
+      - run: DATABASE_URL=postgresql://postgres:postgres@localhost:5432/xen_studio_test node scripts/migrate.mjs
+      - run: go test ./... -race -count=1
+      - name: Dependency scan (Go)
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  node:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: xen_studio_test }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+      redis: { image: "redis:7", ports: ["6379:6379"] }
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/xen_studio_test
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/xen_studio_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.24" }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/migrate.mjs && node scripts/seed.mjs
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm --filter @xen-studio/web build
+      - run: pnpm --filter @xen-studio/identity build && node scripts/e2e-phase1.mjs
+      - name: Dependency scan (npm)
+        run: pnpm audit --prod --audit-level high
+
+  images:
+    if: github.event_name == 'push'
+    needs: [go, node]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { name: gateway, file: infra/docker/go-service.Dockerfile, args: "SERVICE=gateway" }
+          - { name: ledger, file: infra/docker/go-service.Dockerfile, args: "SERVICE=ledger" }
+          - { name: cell-router, file: infra/docker/go-service.Dockerfile, args: "SERVICE=cell-router" }
+          - { name: identity, file: infra/docker/identity.Dockerfile, args: "" }
+          - { name: web, file: infra/docker/web.Dockerfile, args: "" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with: { context: ., file: "${{ matrix.file }}", build-args: "${{ matrix.args }}", tags: "xen-studio/${{ matrix.name }}:${{ github.sha }}", load: true, push: false }
+      - name: Image scan
+        uses: aquasecurity/trivy-action@0.29.0
+        with: { image-ref: "xen-studio/${{ matrix.name }}:${{ github.sha }}", severity: "CRITICAL,HIGH", exit-code: "1", ignore-unfixed: true }
