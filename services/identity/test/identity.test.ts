@@ -72,9 +72,11 @@ describe('identity service', { skip: !DB && 'TEST_DATABASE_URL not set' }, () =>
     const r = await call('GET', '/v1/plans');
     assert.equal(r.status, 200);
     const byId = Object.fromEntries(r.body.plans.map((p: { id: string }) => [p.id, p]));
-    assert.deepEqual(Object.keys(byId).sort(), ['creator', 'starter', 'studio']);
-    assert.equal(byId.studio.max_revision_rounds, 5);
-    assert.equal(byId.starter.max_revision_rounds, 1);
+    assert.deepEqual(Object.keys(byId).sort(), ['pro', 'starter', 'studio']);
+    assert.equal(byId.studio.max_revisions, 5);
+    assert.equal(byId.pro.max_revisions, 5);
+    assert.equal(byId.starter.max_revisions, 2);
+    assert.equal(byId.studio.max_seats, 25);
   });
 
   it('signup creates user, workspace, owner membership, plan-scoped token and one idempotent credit grant', async () => {
@@ -90,7 +92,7 @@ describe('identity service', { skip: !DB && 'TEST_DATABASE_URL not set' }, () =>
     const mine = grants.slice(before);
     assert.equal(mine.length, 1);
     assert.equal(mine[0].key, `workspace-initial-grant:${s.workspace.id}`);
-    assert.equal(mine[0].body.amount, 300);
+    assert.equal(mine[0].body.amount, 200);
 
     const me = await call('GET', '/v1/me', { token: s.access_token });
     assert.equal(me.status, 200);

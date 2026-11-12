@@ -38,7 +38,7 @@ func mustBal(t *testing.T, s *Store, ws string, avail, reserved, spent int64) {
 }
 
 func TestLifecycle(t *testing.T) {
-	s, _ := testStore(t)
+	s, db := testStore(t)
 	ctx, ws := context.Background(), newUUID()
 
 	if _, err := s.Grant(ctx, ws, "g1", 100, "signup"); err != nil {
@@ -69,6 +69,13 @@ func TestLifecycle(t *testing.T) {
 	}
 	if _, err := s.Reserve(ctx, ws, "r3", 71, "job-3"); !errors.Is(err, ErrInsufficient) {
 		t.Fatalf("want ErrInsufficient, got %v", err)
+	}
+	// every entry has exactly one outbox event on the matching credits.* topic
+	var events int
+	var topics string
+	db.QueryRow(`SELECT count(*), string_agg(DISTINCT topic, ',' ORDER BY topic) FROM outbox WHERE workspace_id=$1`, ws).Scan(&events, &topics)
+	if events != 6 || topics != "credits.debited,credits.granted,credits.refunded,credits.reserved" {
+		t.Fatalf("outbox: %d events on %q", events, topics)
 	}
 	es, _ := s.Entries(ctx, ws, 50)
 	if len(es) != 6 { // grant, reserve, debit, refund(remainder), reserve, refund
@@ -150,11 +157,11 @@ func TestLedgerIsAppendOnly(t *testing.T) {
 	if _, err := s.Grant(ctx, ws, "g", 5, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE ledger_entries SET amount = 500 WHERE workspace_id=$1`, ws); err == nil {
-		t.Fatal("UPDATE on ledger_entries must be rejected")
+	if _, err := db.Exec(`UPDATE credit_transactions SET amount = 500 WHERE workspace_id=$1`, ws); err == nil {
+		t.Fatal("UPDATE on credit_transactions must be rejected")
 	}
-	if _, err := db.Exec(`DELETE FROM ledger_entries WHERE workspace_id=$1`, ws); err == nil {
-		t.Fatal("DELETE on ledger_entries must be rejected")
+	if _, err := db.Exec(`DELETE FROM credit_transactions WHERE workspace_id=$1`, ws); err == nil {
+		t.Fatal("DELETE on credit_transactions must be rejected")
 	}
 }
 

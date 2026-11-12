@@ -10,7 +10,7 @@ import { Actor, atLeast } from './guards';
 import { LedgerClient } from './ledger.client';
 
 interface PlanRow {
-  id: string; name: string; monthly_price_cents: number; monthly_credits: string; max_revision_rounds: number;
+  id: string; name: string; monthly_price_cents: number; monthly_credits: string; max_revisions: number;
   max_video_seconds: number; max_concurrent_jobs: number; queue_priority: number; rate_limit_rpm: number;
   workspace_rate_rpm: number; max_seats: number; watermark: boolean; features: Record<string, unknown>;
 }
@@ -84,12 +84,12 @@ export class IdentityService {
   private async createWorkspaceTx(c: PoolClient, userId: string, name: string, ip?: string) {
     const id = randomUUID();
     const { rows } = await c.query(
-      `INSERT INTO workspaces (id, name, slug, plan_id, created_by) VALUES ($1,$2,$3,'starter',$4) RETURNING id, name, slug, plan_id, created_at`,
-      [id, name, slugify(name), userId],
+      `INSERT INTO workspaces (id, name, slug, plan_id, created_by, owner_id, region) VALUES ($1,$2,$3,'starter',$4,$4,$5) RETURNING id, name, slug, plan_id, region, created_at`,
+      [id, name, slugify(name), userId, process.env.CELL_REGION ?? 'local'],
     );
     await c.query(`INSERT INTO memberships (workspace_id, user_id, role) VALUES ($1,$2,'owner')`, [id, userId]);
     await this.audit(c, id, userId, 'workspace.created', id, { name }, ip);
-    await this.emit(c, id, 'xen.identity.workspace.v1', 'workspace.created', { workspace_id: id, plan: 'starter', owner_id: userId });
+    await this.emit(c, id, 'workspace.events', 'workspace.created', { workspace_id: id, plan: 'starter', owner_id: userId });
     return rows[0] as { id: string; name: string; slug: string; plan_id: string; created_at: Date };
   }
 

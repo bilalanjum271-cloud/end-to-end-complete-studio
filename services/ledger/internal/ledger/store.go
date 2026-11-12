@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -46,7 +47,7 @@ type Entry struct {
 	JobID          string    `json:"job_id,omitempty"`
 	IdempotencyKey string    `json:"idempotency_key"`
 	Reason         string    `json:"reason,omitempty"`
-	AvailableAfter int64     `json:"available_after"`
+	AvailableAfter int64     `json:"balance_after"`
 	ReservedAfter  int64     `json:"reserved_after"`
 	CreatedAt      time.Time `json:"created_at"`
 	Replayed       bool      `json:"replayed"`
@@ -106,8 +107,8 @@ func (s *Store) inTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return err
 }
 
-const entryCols = `id, workspace_id, entry_type, amount, COALESCE(reservation_id::text,''), COALESCE(job_id,''),
-  idempotency_key, reason, available_after, reserved_after, created_at`
+const entryCols = `id, workspace_id, type, amount, COALESCE(reservation_id::text,''), COALESCE(job_id,''),
+  idempotency_key, reason, balance_after, reserved_after, created_at`
 
 func scanEntry(row interface{ Scan(...any) error }) (*Entry, error) {
 	var e Entry
@@ -122,7 +123,7 @@ func findByKey(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, ws, key string) (*Entry, error) {
 	e, err := scanEntry(q.QueryRowContext(ctx,
-		`SELECT `+entryCols+` FROM ledger_entries WHERE workspace_id=$1 AND idempotency_key=$2`, ws, key))
+		`SELECT `+entryCols+` FROM credit_transactions WHERE workspace_id=$1 AND idempotency_key=$2`, ws, key))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -157,11 +158,31 @@ func insertEntry(ctx context.Context, tx *sql.Tx, e *Entry) error {
 	if e.JobID != "" {
 		job = e.JobID
 	}
-	return tx.QueryRowContext(ctx,
-		`INSERT INTO ledger_entries (workspace_id,id,entry_type,amount,reservation_id,job_id,idempotency_key,reason,available_after,reserved_after)
+	if err := tx.QueryRowContext(ctx,
+		`INSERT INTO credit_transactions (workspace_id,id,type,amount,reservation_id,job_id,idempotency_key,reason,balance_after,reserved_after)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING created_at`,
 		e.WorkspaceID, e.ID, e.Type, e.Amount, res, job, e.IdempotencyKey, e.Reason, e.AvailableAfter, e.ReservedAfter).
-		Scan(&e.CreatedAt)
+		Scan(&e.CreatedAt); err != nil {
+		return err
+	}
+	// Transactional outbox: the Kafka event is recorded in the same transaction as the entry,
+	// so billing, analytics and fraud consumers see every credit movement exactly once.
+	payload, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO outbox (workspace_id, id, topic, event_type, payload) VALUES ($1,$2,$3,$4,$5)`,
+		e.WorkspaceID, newUUID(), topicFor[e.Type], topicFor[e.Type], string(payload))
+	return err
+}
+
+// topicFor maps a ledger entry type to its Kafka topic (Master Stack "Kafka topics").
+var topicFor = map[string]string{
+	"reserve": "credits.reserved",
+	"debit":   "credits.debited",
+	"refund":  "credits.refunded",
+	"grant":   "credits.granted",
 }
 
 // write wraps one idempotent ledger operation. want describes the operation for replay checks.
@@ -359,7 +380,7 @@ func (s *Store) Entries(ctx context.Context, ws string, limit int) ([]Entry, err
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+entryCols+` FROM ledger_entries WHERE workspace_id=$1 ORDER BY created_at DESC, id LIMIT $2`, ws, limit)
+		`SELECT `+entryCols+` FROM credit_transactions WHERE workspace_id=$1 ORDER BY created_at DESC, id LIMIT $2`, ws, limit)
 	if err != nil {
 		return nil, err
 	}

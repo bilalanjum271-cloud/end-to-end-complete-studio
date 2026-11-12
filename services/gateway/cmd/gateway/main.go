@@ -37,6 +37,7 @@ func main() {
 		Upstreams: map[string]string{
 			"identity": httpx.Env("IDENTITY_URL", "http://localhost:8101"),
 			"ledger":   httpx.Env("LEDGER_URL", "http://localhost:8102"),
+			"studio":   httpx.Env("STUDIO_URL", "http://localhost:8104"),
 		},
 		Routes:      gateway.DefaultRoutes(),
 		MaxInflight: maxInflight,

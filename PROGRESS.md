@@ -4,11 +4,11 @@ Resume rule: continue from the **first unchecked item**. A box is ticked only if
 and passed; "written, not run" items stay unchecked with a note. Last updated: 2026-11-12.
 
 ## Blockers a human must resolve
-- [ ] **Attach the "Complete Master Stack" document.** It was not included with the build prompt (both attachments
-      were the prompt itself; the folder and the GitHub repo were empty). Schema, Kafka topics and plan limits below
-      were therefore chosen from the prompt and are logged in DECISIONS.md (D-001…D-005) for reconciliation.
+- [x] "Complete Master Stack" document received (stored at `docs/source/complete-master-stack.pdf`). Phase 1 was
+      reconciled against it: plans, schema names, Kafka topics (DECISIONS.md D-023…D-027).
 - [ ] **Link GitHub to Claude** (Settings → Connectors) so the repo `bilalanjum271-cloud/end-to-end-complete-studio`
-      can be pushed to. Until then the code lives in this folder only.
+      can be pushed to. Until then the code is delivered as a zip with full git history.
+- [ ] **Run the Temporal path once on a machine with Docker** (see "Phase 2 → Written but NOT run").
 
 ## Phase 1 — Foundation  (in progress: core verified, infra-as-code remaining)
 
@@ -19,7 +19,8 @@ File plan: `/packages/ui` design system · `/apps/web` Next.js app · `/services
 ### Done and verified (ran in the build sandbox: PostgreSQL 16, Redis 7, Go 1.24, Node 22)
 - [x] Monorepo layout (`/apps /services /workers /packages /infra /data /xr /docs`), pnpm workspace, single Go module
 - [x] Distributed-SQL schema + migrations (`infra/db/migrations`), idempotent runner, seed data — applied twice cleanly
-- [x] Plans: Starter / Creator / Studio with credits, revision rounds (1 / 3 / 5), seats, priority, rate limits
+- [x] Plans per the Master Stack draft table: Starter / Pro / Studio — video minutes 20 / 100 / 500 (10 credits per minute),
+      revision rounds 2 / 5 / 5, max length 3 / 15 / 60 min, seats 1 / 5 / 25, resolution, languages, voice clones, channels, API, watermark
 - [x] **Credit ledger (Go)**: reserve → debit on success → refund on failure, append-only (DB trigger),
       idempotency key on every write, exactly-once under concurrency — 6 integration tests incl. 60 concurrent
       reserves never overspending and a 25-way same-key retry storm applying once
@@ -44,6 +45,8 @@ File plan: `/packages/ui` design system · `/apps/web` Next.js app · `/services
 - [x] Translations from the start: English, Arabic, Urdu; RTL layouts verified (key-parity test, 2 tests)
 - [x] Responsive check at 360px and 1440px: no horizontal overflow; Playwright visual regression, 8 tests, baselines
       committed for linux (`apps/web/e2e/__screenshots__`)
+- [x] Master Stack alignment migration (`0003`): `credit_transactions` ledger table, plan limit columns, `workspaces.owner_id/region`, `subscriptions`
+- [x] Ledger writes a `credits.reserved / debited / refunded / granted` outbox event in the same transaction as each entry (tested)
 - [x] **Phase 1 end-to-end test** (`node scripts/e2e-phase1.mjs`): real gateway + identity + ledger + router,
       11 steps, all pass (signup → credits granted once → auth rejection → reserve/commit → reserve/release/402 →
       tenant isolation → refresh/login/logout → rate limits → cell pinning → metrics)
@@ -70,16 +73,54 @@ File plan: `/packages/ui` design system · `/apps/web` Next.js app · `/services
 - [ ] Lighthouse 95+ run and LCP measurement; screen-reader pass (contrast and keyboard paths are tested)
 - [ ] k6 smoke load test per Phase 1 service with throughput per pod
 - [ ] Workspace switcher and members screen in the UI (API exists and is tested)
-- [ ] Plural-aware strings (pricing currently shows "1 revision round(s)")
 
-## Phase 2 — Script-to-Video Studio
-- [ ] Model Router (Python/FastAPI): provider interfaces for LLM, TTS, video, image, moderation; two adapters each + mock; failover
-- [ ] Prompt moderation → cost estimate → credit reservation (ledger API is ready)
-- [ ] Temporal workflow: research → script → approval signal → scene plan → voice ‖ visuals → FFmpeg assembly + subtitles → QC
-- [ ] Job state in ScyllaDB; progress over Kafka → WebSocket gateway
-- [ ] Review: scene-level regeneration, revision rounds limited by plan (max 5), export; watermark + C2PA
-- [ ] Dashboard UI: composer, script approval, live per-scene progress with time and cost, timeline editor
-- [ ] Phase 2 e2e with mock providers
+## Phase 2 — Script-to-Video Studio  (core flow built and verified with mock providers)
+
+File plan: `services/studio/xen_studio/{router,pipeline,api}` (Python) · `infra/db/migrations/0004` ·
+`apps/web/src/app/app/video` · gateway route `/v1/projects`.
+
+### Done and verified
+- [x] Schema for projects, scripts, scenes, jobs, renders, revisions, moderation_events (Master Stack tables), applied
+- [x] **Model Router**: provider interface per capability (moderation, LLM, TTS, visual, QC), ordered adapters, automatic
+      failover, per-provider circuit breaker with cooldown probe, language routing, cost reporting, `provider.health`
+      events — 7 tests. Two mock providers per capability so the platform runs with no API keys
+- [x] **Pipeline** (one flow definition, host-agnostic): prompt moderation → cost estimate → credit reservation →
+      research → script → **pause for approval** (edit lines / rewrite / cancel) → per-scene voice ‖ visuals → automated QC with
+      retry → FFmpeg assembly (stitch, EBU R128 loudness, subtitle track, SRT + VTT, watermark by plan) → output
+      moderation → provenance manifest → **pause for review** → scene-level regeneration with the plan's revision-round
+      limit → accept → debit. Any failure refunds the reservation
+- [x] **Project API** behind the gateway: estimate, idempotent create, list, detail with per-scene progress, approve,
+      rewrite, review (accept / revise), cancel, video (seekable), subtitles, provenance. Tenant-scoped; editor role to write
+- [x] **Phase 2 end-to-end test** (`pytest` in `services/studio`, 5 scenarios, real API + real FFmpeg + real PostgreSQL +
+      real Go ledger): full prompt → reviewed MP4 with exact credit accounting and the Starter 2-round limit; blocked
+      prompt spends nothing; total provider outage refunds; single-provider outage fails over and still delivers;
+      plan length limit, roles, gateway-only access, insufficient credits
+- [x] **Dashboard UI**: composer with live cost estimate, project grid, script approval with inline line editing and
+      research notes, live per-scene progress (voice / visuals, time left, credits), review player with captions,
+      proportional scene timeline for selecting scenes to regenerate, downloads (MP4, SRT, provenance), designed
+      blocked / failed / cancelled / no-credits states. Driven end to end in a real browser; in the visual regression suite
+- [x] Outbox events on the document's topics: `script.requested/generated/approved`, `moderation.decisions`,
+      `job.completed/failed`, `qc.scored`, `render.completed`, `review.submitted`, `project.events`
+
+### Written but NOT run
+- [ ] **Temporal host** (`pipeline/temporal_workflow.py`, `pipeline/worker.py`). The build sandbox could not run a
+      Temporal server, so verified runs use the in-process host (`ORCHESTRATOR=local`), which is not durable across
+      restarts. The flow logic and all activities are shared and tested; only the thin Temporal adapter is unverified.
+      To verify: `docker compose … up -d temporal`, `ORCHESTRATOR=temporal`, start `python -m xen_studio.pipeline.worker`,
+      run the UI flow, then tick this box
+
+### Not built yet (remaining Phase 2 work, in order)
+- [ ] Real provider adapters (LLM, ElevenLabs / Google / Azure TTS, video aggregator, image, moderation, vision QC) — need API keys
+- [ ] Web research with cited sources (mock returns placeholder notes); script structure presets per format
+- [ ] WebSocket live progress via Kafka (UI polls every 1.5 s today); job state in ScyllaDB
+- [ ] S3 storage backend + CDN signed URLs + HLS/DASH ladder (local-directory storage today)
+- [ ] Cryptographic C2PA signing (manifest is written unsigned; needs a signing certificate); invisible watermark
+- [ ] Timeline editor beyond scene selection (trim, reorder, swap voice or music); version history restore UI
+- [ ] Burned-in subtitles option; forced alignment for word-level timing
+- [ ] Per-plan and per-user budget caps beyond the credit balance; priority queues per plan for generation
+- [ ] Cancel during generation; charge policy for revision rounds (currently free within the reservation)
+- [ ] Human trust-and-safety queue and appeals; real-person and age rules
+- [ ] OpenAPI export for the studio service (FastAPI serves it at `/docs`); metrics and traces for the Python service
 
 ## Phase 3 — Localization and publishing
 - [ ] Multi-language scripts and voices, glossary, review queue, subtitle export
@@ -119,7 +160,9 @@ File plan: `/packages/ui` design system · `/apps/web` Next.js app · `/services
 ## What is mocked, untested, or needs a human
 | Item | State |
 |---|---|
-| AI providers | Not built yet (Phase 2). Will ship with mock adapters so everything runs with no keys |
+| AI providers | **All mocked.** Scripts come from templates, not a language model. English narration is a local robotic voice (FFmpeg flite); other languages get a placeholder tone. Visuals are title cards, not generated video. Real output quality needs provider keys |
+| Temporal | Workflow adapter written, never run (see Phase 2) |
+| Storage | Local directory behind a storage interface; S3/MinIO adapter not written |
 | CockroachDB / ScyllaDB / Kafka / Temporal / MinIO | Configured in compose; never started in the build sandbox |
 | Go dependencies | Fetched with `GOPROXY=direct` and no checksum DB (sandbox blocked proxy.golang.org). Run `go mod verify` once on a normal network |
 | Real keys later | LLM/TTS/video providers, Stripe, SMTP/push, YouTube/TikTok/Meta developer apps, cloud account for Terraform, XR devices |

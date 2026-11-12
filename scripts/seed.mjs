@@ -1,33 +1,34 @@
 // Seeds plans and the local cell. Idempotent. Usage: DATABASE_URL=... node scripts/seed.mjs
 import pg from 'pg';
 
+// Limits follow the "Plan limits (draft)" table of the Master Stack document.
+// 1 video minute = 10 credits, so monthly_credits = video_minutes * 10.
+// Prices are provisional: the document leaves them open until cost per video minute is measured in Phase 2.
 export const PLANS = [
-  { id: 'starter', name: 'Starter', monthly_price_cents: 0, monthly_credits: 300, max_revision_rounds: 1,
-    max_video_seconds: 60, max_concurrent_jobs: 1, queue_priority: 10, rate_limit_rpm: 60, workspace_rate_rpm: 120,
-    max_seats: 1, watermark: true, features: { studios: ['video'], export_1080p: false, api: false } },
-  { id: 'creator', name: 'Creator', monthly_price_cents: 2900, monthly_credits: 3000, max_revision_rounds: 3,
-    max_video_seconds: 600, max_concurrent_jobs: 3, queue_priority: 50, rate_limit_rpm: 240, workspace_rate_rpm: 600,
-    max_seats: 3, watermark: false, features: { studios: ['video', 'animation'], export_1080p: true, api: false } },
-  { id: 'studio', name: 'Studio', monthly_price_cents: 9900, monthly_credits: 12000, max_revision_rounds: 5,
-    max_video_seconds: 1800, max_concurrent_jobs: 10, queue_priority: 90, rate_limit_rpm: 600, workspace_rate_rpm: 3000,
-    max_seats: 15, watermark: false, features: { studios: ['video', 'animation', 'ar', 'vr', 'xr'], export_1080p: true, export_4k: true, api: true } },
+  { id: 'starter', name: 'Starter', monthly_price_cents: 0, video_minutes: 20, monthly_credits: 200, max_revisions: 2,
+    max_video_seconds: 180, max_resolution: '720p', max_languages: 10, voice_clones: 0, animation_access: 'limited', xr_access: 'none',
+    max_seats: 1, queue_priority: 10, publish_channels: 1, api_access: false, watermark: true,
+    max_concurrent_jobs: 1, rate_limit_rpm: 60, workspace_rate_rpm: 120 },
+  { id: 'pro', name: 'Pro', monthly_price_cents: 2900, video_minutes: 100, monthly_credits: 1000, max_revisions: 5,
+    max_video_seconds: 900, max_resolution: '1080p', max_languages: 30, voice_clones: 1, animation_access: 'full', xr_access: 'preview',
+    max_seats: 5, queue_priority: 50, publish_channels: 5, api_access: false, watermark: false,
+    max_concurrent_jobs: 3, rate_limit_rpm: 240, workspace_rate_rpm: 600 },
+  { id: 'studio', name: 'Studio', monthly_price_cents: 9900, video_minutes: 500, monthly_credits: 5000, max_revisions: 5,
+    max_video_seconds: 3600, max_resolution: '4k', max_languages: null, voice_clones: 10, animation_access: 'full', xr_access: 'full',
+    max_seats: 25, queue_priority: 90, publish_channels: null, api_access: true, watermark: false,
+    max_concurrent_jobs: 10, rate_limit_rpm: 600, workspace_rate_rpm: 3000 },
 ];
+
+const COLS = ['id', 'name', 'monthly_price_cents', 'video_minutes', 'monthly_credits', 'max_revisions', 'max_video_seconds', 'max_resolution',
+  'max_languages', 'voice_clones', 'animation_access', 'xr_access', 'max_seats', 'queue_priority', 'publish_channels', 'api_access',
+  'watermark', 'max_concurrent_jobs', 'rate_limit_rpm', 'workspace_rate_rpm'];
 
 export async function seed(client) {
   for (const p of PLANS) {
     await client.query(
-      `INSERT INTO plans (id,name,monthly_price_cents,monthly_credits,max_revision_rounds,max_video_seconds,
-         max_concurrent_jobs,queue_priority,rate_limit_rpm,workspace_rate_rpm,max_seats,watermark,features)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-       ON CONFLICT (id) DO UPDATE SET name=excluded.name, monthly_price_cents=excluded.monthly_price_cents,
-         monthly_credits=excluded.monthly_credits, max_revision_rounds=excluded.max_revision_rounds,
-         max_video_seconds=excluded.max_video_seconds, max_concurrent_jobs=excluded.max_concurrent_jobs,
-         queue_priority=excluded.queue_priority, rate_limit_rpm=excluded.rate_limit_rpm,
-         workspace_rate_rpm=excluded.workspace_rate_rpm, max_seats=excluded.max_seats,
-         watermark=excluded.watermark, features=excluded.features`,
-      [p.id, p.name, p.monthly_price_cents, p.monthly_credits, p.max_revision_rounds, p.max_video_seconds,
-        p.max_concurrent_jobs, p.queue_priority, p.rate_limit_rpm, p.workspace_rate_rpm, p.max_seats, p.watermark,
-        JSON.stringify(p.features)],
+      `INSERT INTO plans (${COLS.join(',')}) VALUES (${COLS.map((_, i) => `$${i + 1}`).join(',')})
+       ON CONFLICT (id) DO UPDATE SET ${COLS.slice(1).map((c) => `${c}=excluded.${c}`).join(', ')}`,
+      COLS.map((c) => p[c]),
     );
   }
   await client.query(

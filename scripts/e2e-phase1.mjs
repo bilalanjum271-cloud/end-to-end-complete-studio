@@ -79,15 +79,15 @@ step('signup through the gateway creates a workspace on the Starter plan', async
   assert.equal(r.body.workspace.plan_id, 'starter');
 });
 
-step('the new workspace received exactly its 300 plan credits (identity -> ledger, idempotent)', async () => {
+step('the new workspace received exactly its 200 plan credits (20 video minutes) (identity -> ledger, idempotent)', async () => {
   const r = await api('GET', '/v1/credits', { token: ctx.token });
   assert.equal(r.status, 200);
-  assert.deepEqual({ a: r.body.available, r: r.body.reserved, s: r.body.spent }, { a: 300, r: 0, s: 0 });
+  assert.deepEqual({ a: r.body.available, r: r.body.reserved, s: r.body.spent }, { a: 200, r: 0, s: 0 });
   // replaying the grant with the same key must not add credits
-  const replay = await internal(LEDGER, 'POST', `/internal/v1/workspaces/${ctx.ws}/credits/grant`, { amount: 300, reason: 'starter plan initial credits' }, `workspace-initial-grant:${ctx.ws}`);
+  const replay = await internal(LEDGER, 'POST', `/internal/v1/workspaces/${ctx.ws}/credits/grant`, { amount: 200, reason: 'starter plan initial credits' }, `workspace-initial-grant:${ctx.ws}`);
   assert.equal(replay.status, 200);
   assert.equal(replay.body.replayed, true);
-  assert.equal((await api('GET', '/v1/credits', { token: ctx.token })).body.available, 300);
+  assert.equal((await api('GET', '/v1/credits', { token: ctx.token })).body.available, 200);
 });
 
 step('unauthenticated and forged requests are rejected at the gateway', async () => {
@@ -104,18 +104,18 @@ step('reserve -> commit (success path) debits once and returns the unused remain
   assert.equal((await internal(LEDGER, 'POST', path, { amount: 100 }, 'job-e2e-1:commit')).status, 201);
   assert.equal((await internal(LEDGER, 'POST', path, { amount: 100 }, 'job-e2e-1:commit')).status, 200); // retry
   const b = (await api('GET', '/v1/credits', { token: ctx.token })).body;
-  assert.deepEqual({ a: b.available, r: b.reserved, s: b.spent }, { a: 200, r: 0, s: 100 });
+  assert.deepEqual({ a: b.available, r: b.reserved, s: b.spent }, { a: 100, r: 0, s: 100 });
 });
 
 step('reserve -> release (failure path) refunds in full; overdraw is refused with 402', async () => {
-  const res = await internal(LEDGER, 'POST', `/internal/v1/workspaces/${ctx.ws}/credits/reserve`, { amount: 200, job_id: 'job-e2e-2' }, 'job-e2e-2:reserve');
+  const res = await internal(LEDGER, 'POST', `/internal/v1/workspaces/${ctx.ws}/credits/reserve`, { amount: 100, job_id: 'job-e2e-2' }, 'job-e2e-2:reserve');
   assert.equal(res.status, 201);
   const over = await internal(LEDGER, 'POST', `/internal/v1/workspaces/${ctx.ws}/credits/reserve`, { amount: 1, job_id: 'job-e2e-3' }, 'job-e2e-3:reserve');
   assert.equal(over.status, 402);
   const rel = await internal(LEDGER, 'POST', `/internal/v1/workspaces/${ctx.ws}/reservations/${res.body.reservation_id}/release`, { reason: 'provider failed' }, 'job-e2e-2:release');
   assert.equal(rel.status, 201);
   const b = (await api('GET', '/v1/credits', { token: ctx.token })).body;
-  assert.deepEqual({ a: b.available, r: b.reserved, s: b.spent }, { a: 200, r: 0, s: 100 });
+  assert.deepEqual({ a: b.available, r: b.reserved, s: b.spent }, { a: 100, r: 0, s: 100 });
   const ledger = (await api('GET', '/v1/credits/ledger', { token: ctx.token })).body.entries;
   assert.deepEqual(ledger.map((e) => e.type).sort(), ['debit', 'grant', 'refund', 'refund', 'reserve', 'reserve']);
 });
@@ -123,7 +123,7 @@ step('reserve -> release (failure path) refunds in full; overdraw is refused wit
 step('tenant isolation: a second account cannot see the first workspace', async () => {
   const r = await api('POST', '/v1/auth/signup', { body: { email: `e2e-${randomUUID().slice(0, 8)}@example.com`, password: 'correct horse battery', name: 'Other' } });
   assert.equal(r.status, 201);
-  assert.equal((await api('GET', '/v1/credits', { token: r.body.access_token })).body.available, 300);
+  assert.equal((await api('GET', '/v1/credits', { token: r.body.access_token })).body.available, 200);
   assert.equal((await api('GET', `/v1/workspaces/${ctx.ws}/members`, { token: r.body.access_token })).status, 403);
   assert.equal((await api('POST', `/v1/workspaces/${ctx.ws}/token`, { token: r.body.access_token })).status, 403);
 });

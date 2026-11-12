@@ -3,7 +3,7 @@
 AI content-generation platform: Script-to-Video, Animation, AR, VR, MR/XR and Admin & Analytics in one workspace.
 Cell-based, multi-tenant, designed to scale horizontally.
 
-**Status:** Phase 1 (Foundation) core is built and tested. See [PROGRESS.md](PROGRESS.md) for exactly what is done,
+**Status:** Phase 1 (Foundation) core and the Phase 2 Script-to-Video flow are built and tested with mock AI providers. See [PROGRESS.md](PROGRESS.md) for exactly what is done,
 what is written but unverified, and what remains. Choices are logged in [DECISIONS.md](DECISIONS.md).
 
 ## What runs today
@@ -16,6 +16,7 @@ what is written but unverified, and what remains. Choices are logged in [DECISIO
 | Credit ledger (reserve / debit / refund, append-only, exactly-once) | `services/ledger` | Go |
 | Cell router (workspace → cell) | `services/cell-router` | Go |
 | Identity (auth, workspaces, roles, plans) | `services/identity` | NestJS |
+| Studio (model router, Script-to-Video pipeline, project API) | `services/studio` | Python, FastAPI, Temporal, FFmpeg |
 
 ```
 browser → web (Next.js) → gateway ─┬→ identity ─→ SQL
@@ -25,11 +26,12 @@ browser → web (Next.js) → gateway ─┬→ identity ─→ SQL
 
 ## Run it locally
 
-Requirements: Node 22+, pnpm 10, Go 1.24+, and either Docker or a local PostgreSQL 16 + Redis 7.
+Requirements: Node 22+, pnpm 10, Go 1.24+, Python 3.11+, FFmpeg, and either Docker or a local PostgreSQL 16 + Redis 7.
 
 ```bash
 cp .env.example .env            # then set JWT_SECRET and INTERNAL_SERVICE_TOKEN to long random strings
 pnpm install
+pip install -e "services/studio[dev]"      # use a virtualenv; set PYTHON=path/to/python if it is not on PATH
 
 # infrastructure — option A: Docker (CockroachDB, Redis, Kafka, Temporal, MinIO, Prometheus, Grafana)
 docker compose -f infra/compose/docker-compose.yml up -d
@@ -38,7 +40,9 @@ docker compose -f infra/compose/docker-compose.yml up -d
 node scripts/dev.mjs            # builds, migrates, seeds, starts every service + the web app
 ```
 
-Open http://localhost:3000 and create an account. You land in the app with 300 Starter credits.
+Open http://localhost:3000 and create an account. You land in Script-to-Video with 200 Starter credits (20 video minutes).
+Write a prompt, approve the script, watch it generate, review it. With no provider keys the AI is mocked: template
+scripts, a local robotic English voice and title-card visuals — the pipeline, credits and UI are real.
 
 ## Test it
 
@@ -53,6 +57,10 @@ TEST_DATABASE_URL='postgresql://USER:PASS@localhost:5432/xen_studio_test' pnpm t
 # Phase 1 end-to-end: boots the real services and drives the whole flow through the gateway
 pnpm --filter @xen-studio/identity build
 DATABASE_URL='postgresql://USER:PASS@localhost:5432/xen_studio' node scripts/e2e-phase1.mjs
+
+# Phase 2 end-to-end: prompt -> approved script -> rendered MP4 -> revisions -> accept (mock providers, real FFmpeg)
+go build -o bin/ ./services/...
+cd services/studio && TEST_DATABASE_URL='postgresql://USER:PASS@localhost:5432/xen_studio_test' pytest && cd ../..
 
 # visual regression (stack must be running: node scripts/dev.mjs --prod)
 pnpm --filter @xen-studio/web test:visual

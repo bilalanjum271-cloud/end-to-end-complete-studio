@@ -1,5 +1,5 @@
-// Starts the Phase 1 stack for local development: ledger, cell-router, gateway (Go),
-// identity (NestJS) and the web app. Infrastructure (SQL, Redis) must already be up:
+// Starts the local stack: ledger, cell-router, gateway (Go), identity (NestJS), studio (Python:
+// model router + Script-to-Video pipeline + project API; needs `pip install -e services/studio` and FFmpeg) and the web app. Infrastructure (SQL, Redis) must already be up:
 //   docker compose -f infra/compose/docker-compose.yml up -d     (or local Postgres + Redis)
 //   node scripts/dev.mjs            add --prod to serve the production web build
 import { execFileSync, spawn } from 'node:child_process';
@@ -31,6 +31,7 @@ const procs = [
   ['router', join(root, 'bin', `cell-router${exe}`), [], root],
   ['gateway', join(root, 'bin', `gateway${exe}`), [], root],
   ['identity', 'node', ['dist/src/main.js'], join(root, 'services', 'identity')],
+  ['studio', process.env.PYTHON ?? (process.platform === 'win32' ? 'python' : 'python3'), ['-m', 'xen_studio.api.main'], join(root, 'services', 'studio')],
   ['web', 'pnpm', ['--filter', '@xen-studio/web', prod ? 'start' : 'dev'], root],
 ].map(([name, cmd, args, cwd]) => {
   const p = spawn(cmd, args, { cwd, env, stdio: 'inherit', shell: process.platform === 'win32' && (cmd === 'pnpm') });

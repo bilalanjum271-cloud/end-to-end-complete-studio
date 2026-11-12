@@ -19,15 +19,19 @@ export default async function Pricing() {
       </div>
       <ul className="mt-12 grid gap-4 lg:grid-cols-3">
         {plans.map((p) => {
-          const featured = p.id === 'creator';
+          const featured = p.id === 'pro';
           const priority = p.queue_priority >= 80 ? 'pricing.priority.high' : p.queue_priority >= 40 ? 'pricing.priority.mid' : 'pricing.priority.low';
           const lines = [
-            t('pricing.credits', { n: num.format(p.monthly_credits) }),
-            t('pricing.rounds', { n: p.max_revision_rounds }),
+            t('pricing.minutes', { n: num.format(p.video_minutes), c: num.format(p.monthly_credits) }),
+            t('pricing.rounds', { n: p.max_revisions }),
             t('pricing.length', { n: Math.round(p.max_video_seconds / 60) }),
-            t('pricing.concurrent', { n: p.max_concurrent_jobs }),
+            t('pricing.resolution', { r: p.max_resolution === '4k' ? '4K' : p.max_resolution }),
+            p.max_languages === null ? t('pricing.languages.all') : t('pricing.languages', { n: p.max_languages }),
             t('pricing.seats', { n: p.max_seats }),
             t(priority),
+            p.publish_channels === null ? t('pricing.channels.all') : t('pricing.channels', { n: p.publish_channels }),
+            ...(p.voice_clones > 0 ? [t('pricing.clones', { n: p.voice_clones })] : []),
+            ...(p.api_access ? [t('pricing.api')] : []),
             t(p.watermark ? 'pricing.watermark' : 'pricing.nowatermark'),
           ];
           return (

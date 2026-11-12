@@ -1,17 +1,36 @@
-# Xen Studio Kafka topic catalog (source of truth; applied by infra/kafka/create-topics.sh).
-# Conventions:
-#   name:       xen.<domain>.<entity>.v<schema major>
-#   key:        workspace_id (all events for a workspace stay ordered on one partition)
-#   partitions: local value; production multiplies via PARTITION_FACTOR (see docs/capacity.md, Phase 8)
-#   dlq:        every consumed topic has <name>.dlq; consumers park poison messages after 5 attempts
-#   schemas:    Avro in the schema registry, subject <topic>-value, BACKWARD compatibility
+# Xen Studio Kafka topic catalog, from the "Kafka topics" section of the Master Stack document
+# (docs/source/complete-master-stack.pdf). Applied locally by infra/kafka/create-topics.sh.
+# Rules from the document: every topic has a registered schema (subject <topic>-value, BACKWARD
+# compatibility), is keyed by project or workspace id so related events stay ordered, and has a
+# matching dead-letter topic <topic>.dlq.
+# partitions are local values; production multiplies them (docs/capacity.md, Phase 8).
 defaults: { replication: 3, min_insync_replicas: 2, tiered_storage: true, local_retention_hours: 24 }
 topics:
-  - { name: xen.identity.workspace.v1,   partitions: 12, retention_days: 30,  dlq: true,  producer: identity,  note: "workspace.created / plan_changed / member events (outbox)" }
-  - { name: xen.ledger.entry.v1,         partitions: 24, retention_days: 365, dlq: true,  producer: ledger,    note: "every ledger entry; feeds revenue and fraud signals" }
-  - { name: xen.audit.event.v1,          partitions: 12, retention_days: 365, dlq: false, producer: all,       note: "audit log stream to the lakehouse" }
-  - { name: xen.generation.job.v1,       partitions: 48, retention_days: 14,  dlq: true,  producer: studio,    note: "job lifecycle: requested/started/scene_done/succeeded/failed (Phase 2)" }
-  - { name: xen.generation.progress.v1,  partitions: 48, retention_days: 1,   dlq: false, producer: workers,   note: "per-scene progress fan-out to WebSockets (Phase 2)" }
-  - { name: xen.moderation.decision.v1,  partitions: 12, retention_days: 90,  dlq: true,  producer: moderation, note: "prompt and output moderation results (Phase 2)" }
-  - { name: xen.notification.request.v1, partitions: 12, retention_days: 7,   dlq: true,  producer: all,       note: "email / push / in-app requests (Phase 3)" }
-  - { name: xen.analytics.event.v1,      partitions: 96, retention_days: 7,   dlq: false, producer: all,       note: "product events to Flink and the lakehouse (Phase 4)" }
+  - { name: project.events,          key: project_id,   partitions: 12, retention_days: 30,  producer: project,       consumers: "analytics, notification" }
+  - { name: script.requested,        key: project_id,   partitions: 12, retention_days: 14,  producer: script,        consumers: "workflow, localization, analytics" }
+  - { name: script.generated,        key: project_id,   partitions: 12, retention_days: 14,  producer: script,        consumers: "workflow, localization, analytics" }
+  - { name: script.approved,         key: project_id,   partitions: 12, retention_days: 14,  producer: script,        consumers: "workflow, localization, analytics" }
+  - { name: moderation.decisions,    key: project_id,   partitions: 12, retention_days: 90,  producer: moderation,    consumers: "workflow, review queue, analytics" }
+  - { name: localization.completed,  key: project_id,   partitions: 12, retention_days: 14,  producer: localization,  consumers: "scene planner" }
+  - { name: scene.planned,           key: project_id,   partitions: 24, retention_days: 14,  producer: scene-planner, consumers: "voice, visual, avatar, audio" }
+  - { name: job.requested,           key: project_id,   partitions: 48, retention_days: 14,  producer: model-router,  consumers: "workflow, credit ledger, quality check, analytics" }
+  - { name: job.started,             key: project_id,   partitions: 48, retention_days: 14,  producer: workers,       consumers: "workflow, analytics" }
+  - { name: job.completed,           key: project_id,   partitions: 48, retention_days: 14,  producer: workers,       consumers: "workflow, credit ledger, quality check, analytics" }
+  - { name: job.failed,              key: project_id,   partitions: 48, retention_days: 14,  producer: workers,       consumers: "workflow, credit ledger, analytics" }
+  - { name: qc.scored,               key: project_id,   partitions: 24, retention_days: 30,  producer: quality-check, consumers: "workflow, model router" }
+  - { name: render.completed,        key: project_id,   partitions: 12, retention_days: 30,  producer: assembly,      consumers: "review, notification, publishing" }
+  - { name: review.submitted,        key: project_id,   partitions: 12, retention_days: 30,  producer: review,        consumers: "workflow, analytics" }
+  - { name: publish.scheduled,       key: project_id,   partitions: 12, retention_days: 30,  producer: publishing,    consumers: "notification, analytics" }
+  - { name: publish.completed,       key: project_id,   partitions: 12, retention_days: 30,  producer: publishing,    consumers: "notification, analytics" }
+  - { name: credits.reserved,        key: workspace_id, partitions: 24, retention_days: 365, producer: credit-ledger, consumers: "billing, analytics, fraud" }
+  - { name: credits.debited,         key: workspace_id, partitions: 24, retention_days: 365, producer: credit-ledger, consumers: "billing, analytics, fraud" }
+  - { name: credits.refunded,        key: workspace_id, partitions: 24, retention_days: 365, producer: credit-ledger, consumers: "billing, analytics, fraud" }
+  - { name: billing.events,          key: workspace_id, partitions: 12, retention_days: 365, producer: billing,       consumers: "credit ledger, notification" }
+  - { name: provider.health,         key: provider,     partitions: 6,  retention_days: 7,   producer: model-router,  consumers: "routing rules, alerts" }
+  - { name: xr.asset.generated,      key: project_id,   partitions: 12, retention_days: 14,  producer: xr,            consumers: "analytics, notification" }
+  - { name: xr.session.events,       key: project_id,   partitions: 24, retention_days: 7,   producer: xr,            consumers: "analytics, notification" }
+  - { name: user.activity,           key: workspace_id, partitions: 96, retention_days: 7,   producer: "frontend, gateway", consumers: "flink, fraud, product analytics" }
+  - { name: audit.events,            key: workspace_id, partitions: 12, retention_days: 365, producer: all,           consumers: "audit store, security monitoring" }
+  # Additions not in the document (DECISIONS.md D-023):
+  - { name: credits.granted,         key: workspace_id, partitions: 24, retention_days: 365, producer: credit-ledger, consumers: "billing, analytics, fraud" }
+  - { name: workspace.events,        key: workspace_id, partitions: 12, retention_days: 30,  producer: workspace,     consumers: "billing, analytics, notification" }

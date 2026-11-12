@@ -6,7 +6,7 @@ import { accessToken, gw, prefs, type Balance } from '@/lib/server';
 
 export const metadata: Metadata = { title: 'Credits' };
 
-interface Entry { id: string; type: 'grant' | 'reserve' | 'debit' | 'refund'; amount: number; reason?: string; job_id?: string; available_after: number; created_at: string }
+interface Entry { id: string; type: 'grant' | 'reserve' | 'debit' | 'refund'; amount: number; reason?: string; job_id?: string; balance_after: number; created_at: string }
 
 export default async function Credits() {
   const { t, locale } = await prefs();
@@ -48,7 +48,7 @@ export default async function Credits() {
             { key: 'type', header: t('credits.col.type'), cell: (e) => t(`credits.type.${e.type}`) },
             { key: 'reason', header: t('credits.col.reason'), cell: (e) => <span className="text-fg-muted">{e.reason || e.job_id || '—'}</span> },
             { key: 'amount', header: t('credits.col.amount'), align: 'end', mono: true, cell: (e) => <span dir="ltr">{sign(e)}{num.format(e.amount)}</span> },
-            { key: 'balance', header: t('credits.col.balance'), align: 'end', mono: true, cell: (e) => num.format(e.available_after) },
+            { key: 'balance', header: t('credits.col.balance'), align: 'end', mono: true, cell: (e) => num.format(e.balance_after) },
           ]} />
         )}
       </section>

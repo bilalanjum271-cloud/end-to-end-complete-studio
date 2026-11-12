@@ -1,5 +1,10 @@
 import { expect, test } from '@playwright/test';
 
+// Each test presents its own client address so the gateway's per-IP auth limit (30/min) does not couple tests together.
+test.beforeEach(async ({ context }) => {
+  await context.setExtraHTTPHeaders({ 'x-forwarded-for': `10.77.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}` });
+});
+
 test('marketing home', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
@@ -9,7 +14,7 @@ test('marketing home', async ({ page }) => {
 
 test('pricing shows the three plans', async ({ page }) => {
   await page.goto('/pricing');
-  for (const plan of ['Starter', 'Creator', 'Studio']) await expect(page.getByRole('heading', { name: plan, exact: true })).toBeVisible();
+  for (const plan of ['Starter', 'Pro', 'Studio']) await expect(page.getByRole('heading', { name: plan, exact: true })).toBeVisible();
   await expect(page).toHaveScreenshot('pricing.png');
 });
 
@@ -29,14 +34,16 @@ test('signup lands in the app shell; palette, shortcuts, credits, RTL and light 
   await page.getByLabel('Password').fill('correct horse battery');
   await page.getByRole('button', { name: 'Create account' }).click();
   await page.waitForURL('**/app/video');
-  await expect(page).toHaveScreenshot('app-video.png', { mask: [page.getByText('Visual Test')] });
+  await expect(page).toHaveScreenshot('app-video.png');
 
   await page.keyboard.press('Control+k');
   await expect(page.getByPlaceholder('Search or jump to…').last()).toBeFocused();
   await page.keyboard.type('credits');
   await page.keyboard.press('Enter');
   await page.waitForURL('**/app/credits');
-  await expect(page.getByText('300').first()).toBeVisible(); // plan credits arrived from the ledger
+  await expect(page.getByText('200').first()).toBeVisible(); // plan credits arrived from the ledger
+  await expect(page.getByRole('dialog')).toBeHidden(); // palette has finished closing
+  await page.mouse.move(0, 0); // no hover tooltip in the shot
   await expect(page).toHaveScreenshot('credits.png', { mask: [page.locator('time')] });
 
   if ((page.viewportSize()?.width ?? 0) >= 768) {
@@ -44,6 +51,22 @@ test('signup lands in the app shell; palette, shortcuts, credits, RTL and light 
     await page.keyboard.press('x');
     await page.waitForURL('**/app/xr');
   }
+
+  // Script-to-Video: prompt -> script approval -> live generation -> review player (mock providers, real FFmpeg)
+  await page.goto('/app/video');
+  await page.waitForLoadState('networkidle'); // streaming can briefly leave two copies of the form in the DOM
+  await page.locator('textarea[name=prompt]').last().fill('A short documentary about the Tunguska event of 1908');
+  await page.getByRole('button', { name: 'Write script' }).click();
+  await page.getByRole('heading', { name: 'Script', exact: true }).waitFor({ timeout: 30_000 });
+  await expect(page).toHaveScreenshot('video-script.png');
+  await page.getByRole('button', { name: 'Approve and generate' }).click();
+  await page.getByRole('heading', { name: 'Review', exact: true }).waitFor({ timeout: 120_000 });
+  const duration = await page.evaluate(() => new Promise<number>((resolve) => {
+    const v = document.querySelector('video')!;
+    if (v.readyState > 0) resolve(v.duration); else v.onloadedmetadata = () => resolve(v.duration);
+  }));
+  expect(duration).toBeGreaterThan(5);
+  await expect(page).toHaveScreenshot('video-review.png', { mask: [page.locator('video')] });
   await context.addCookies([{ name: 'xs_locale', value: 'ar', url: baseURL! }, { name: 'xs_theme', value: 'light', url: baseURL! }]);
   await page.goto('/app/credits');
   await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');

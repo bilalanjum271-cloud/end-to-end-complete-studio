@@ -10,7 +10,7 @@ grep -E '^\s+- \{ name:' "$dir/topics.yaml" | while read -r line; do
   parts=$(sed -E 's/.*partitions: ([0-9]+),.*/\1/' <<<"$line")
   days=$(sed -E 's/.*retention_days: ([0-9]+),.*/\1/' <<<"$line")
   rpk topic create "$name" --brokers "$BROKER" -p "$parts" -r "$RF" -c "retention.ms=$((days*86400000))" || true
-  if grep -q 'dlq: true' <<<"$line"; then
+  if true; then  # every topic has a dead-letter twin
     rpk topic create "$name.dlq" --brokers "$BROKER" -p "$parts" -r "$RF" -c "retention.ms=$((30*86400000))" || true
   fi
 done

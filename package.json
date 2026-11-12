@@ -12,7 +12,8 @@
     "test:go": "go test ./services/... ./packages/go/...",
     "db:migrate": "node scripts/migrate.mjs",
     "db:seed": "node scripts/seed.mjs",
-    "e2e:phase1": "node scripts/e2e-phase1.mjs"
+    "e2e:phase1": "node scripts/e2e-phase1.mjs",
+    "e2e:phase2": "cd services/studio && pytest -q"
   },
   "devDependencies": { "pg": "^8.13.1" }
 }

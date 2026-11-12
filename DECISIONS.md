@@ -4,8 +4,8 @@ Choices made where the source document was silent or unavailable. Each can be re
 
 | # | Decision | Why | Revisit when |
 |---|---|---|---|
-| D-001 | Built without the "Complete Master Stack" document | It was not attached; the prompt said not to stop | The document is supplied: diff schema, topics and plan limits against it |
-| D-002 | Three plans: **Starter** (free, 300 credits, 1 revision round), **Creator** ($29, 3,000, 3 rounds), **Studio** ($99, 12,000, 5 rounds); Enterprise is contact-sales | Prompt: "up to 5 revision rounds (limited by plan)" and a pricing page | Master Stack plan limits |
+| D-001 | Phase 1 was first built without the Master Stack document, then reconciled when it arrived (D-023…D-027) | It was not attached at first | Done |
+| D-002 | Superseded by D-024 | — | — |
 | D-003 | Roles: owner, admin, editor, viewer per workspace; platform roles user / staff / superadmin | Minimum set that supports teams and the Admin dashboard | Master Stack role matrix |
 | D-004 | Schema in `infra/db/migrations/0001`; every tenant table's primary key starts with `workspace_id` | Lets distributed SQL range-partition by workspace; makes cell splits a key-range move | Master Stack schema |
 | D-005 | Kafka topic names `xen.<domain>.<entity>.v<n>`, keyed by `workspace_id`, each with a `.dlq` | Prompt requirements; catalog in `infra/kafka/topics.yaml` | Master Stack topic list |
@@ -26,3 +26,13 @@ Choices made where the source document was silent or unavailable. Each can be re
 | D-020 | Unbuilt studios show an "In build" state rather than fake controls | No stub UI that pretends to work | Replaced phase by phase |
 | D-021 | Load shedding formula: priority p admitted while in-flight < max × (0.5 + p/200) | Sheds anonymous and free traffic first, paid plans last, with one integer comparison | Tune with Phase 8 load tests |
 | D-022 | Application services run on the host in local dev (`scripts/dev.mjs`); compose runs infrastructure only | Faster rebuilds; Dockerfiles exist for CI and deployment | — |
+| D-023 | Two Kafka topics added beyond the document: `credits.granted` and `workspace.events` | The ledger needs a topic for grants; workspace lifecycle has no topic in the document | — |
+| D-024 | Plans follow the document's draft table (Starter / Pro / Studio). **1 video minute = 10 credits**, so 20 / 100 / 500 minutes = 200 / 1,000 / 5,000 credits. Prices ($0 / $29 / $99) are provisional | The document leaves prices open until cost per video minute is measured | After real providers are connected and cost per minute is measured |
+| D-025 | Where the document and the build prompt differ, the prompt wins: CockroachDB (doc: PostgreSQL), Go gateway (doc: Kong/Envoy), in-house identity service (doc: Keycloak/Auth0), Qdrant | The prompt is the later, more specific instruction and fixes the stack | SSO in Phase 8 may bring in Keycloak behind the identity service |
+| D-026 | The document's 22 services are grouped into fewer deployables for now: `identity` (Auth + Workspace), `ledger`, `studio` (Project, Script, Scene planner, Model router, Voice, Visual, Assembly, Quality check, Review, Moderation, Research as modules) | One team cannot operate 22 services on day one; module boundaries match the document so each can be split out | Split when a module needs independent scaling (first candidates: model router, assembly workers) |
+| D-027 | The project API lives in the Python studio service, not NestJS | It shares the pipeline's data access and starts workflows directly; avoids a second Temporal client stack in Phase 2 | Move to a NestJS project service if business logic grows around it |
+| D-028 | The workflow is written once (`pipeline/flow.py`) against a small host interface, with a Temporal host and an in-process host | The sandbox could not run Temporal; this keeps one tested definition of the pipeline instead of two | Remove the in-process host from production images once the Temporal path is verified |
+| D-029 | Voice for a scene is generated first and the visual is cut to its length; scenes run in parallel with each other | Narration length is only known after synthesis | With real video models, generate fixed-length clips and time-stretch or pad |
+| D-030 | Revision rounds regenerate scenes at no extra charge inside the original reservation | Simple and predictable for the first release | Revisit with measured cost per regeneration |
+| D-031 | Live progress uses 1.5 s polling through the web tier | No Kafka/WebSocket path could be run in the sandbox | Replace with WebSocket push (Phase 2 remaining) |
+| D-032 | Provenance: an unsigned C2PA-shaped manifest plus MP4 metadata and a visible watermark on Starter | Signing needs a certificate and the c2pa toolchain | When a signing certificate is available |
