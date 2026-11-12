@@ -20,8 +20,8 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   }
   return (
     <div className="flex flex-col gap-6">
-      <Link href="/app/video" className="inline-flex w-fit items-center gap-2 text-sm text-fg-muted hover:text-fg">
-        <ArrowLeft className="size-4 rtl:-scale-x-100" aria-hidden />{t('project.back')}
+      <Link href={project.dashboard_type === 'animation' ? '/app/animation' : '/app/video'} className="inline-flex w-fit items-center gap-2 text-sm text-fg-muted hover:text-fg">
+        <ArrowLeft className="size-4 rtl:-scale-x-100" aria-hidden />{t(project.dashboard_type === 'animation' ? 'project.back.animation' : 'project.back')}
       </Link>
       <ProjectView initial={project} />
     </div>

@@ -1,0 +1,19 @@
+version: 2
+sources:
+  - name: raw
+    schema: raw
+    tables:
+      - name: events
+        loaded_at_field: created_at
+        freshness: { warn_after: { count: 1, period: hour }, error_after: { count: 2, period: hour } }
+models:
+  - name: stg_events
+    columns:
+      - { name: event_id, tests: [unique, not_null] }
+      - { name: workspace_id, tests: [not_null] }
+      - name: topic
+        tests:
+          - accepted_values:
+              values: [project.events, script.requested, script.generated, script.approved, moderation.decisions, localization.completed,
+                       job.completed, job.failed, qc.scored, render.completed, review.submitted, credits.reserved, credits.debited,
+                       credits.refunded, credits.granted, workspace.events, user.activity, audit.events]

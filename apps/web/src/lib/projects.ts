@@ -1,10 +1,12 @@
-export type ProjectStatus = 'moderating' | 'blocked' | 'insufficient_credits' | 'writing_script' | 'awaiting_approval' | 'generating' | 'in_review' | 'completed' | 'failed' | 'cancelled';
+export type ProjectStatus = 'moderating' | 'ingesting' | 'rights_review' | 'blocked' | 'insufficient_credits' | 'writing_script' | 'awaiting_approval' | 'generating' | 'in_review' | 'completed' | 'failed' | 'cancelled';
 export type StepStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 
 export interface ProjectSummary {
   id: string; title: string; prompt: string; language: string; target_seconds: number; status: ProjectStatus; error: string | null;
   estimate_credits: number; script_version: number; render_version: number; revision_round: number; max_revisions: number; created_at: string;
+  dashboard_type: 'video' | 'animation'; source_type: 'prompt' | 'text' | 'link'; style_profile: string | null; music: string;
 }
+export interface StyleProfile { id: string; name: string; look: string; palette: string[]; preset: boolean }
 export interface Scene { position: number; narration: string; visual_prompt: string; voice_status: StepStatus; visual_status: StepStatus; duration_ms: number; generation: number }
 export interface Project extends ProjectSummary {
   script: { version: number; title: string; status: string; research: { note: string; source: string }[] } | null;
@@ -14,12 +16,17 @@ export interface Project extends ProjectSummary {
   revisions_left: number;
   package: { titles: string[]; description: string; tags: string[]; has_thumbnail: boolean } | null;
   exports: { format: '9:16' | '1:1'; status: 'queued' | 'running' | 'succeeded' | 'failed' }[];
+  localizations: { language: string; status: LocStatus; error: string | null; credits: number }[];
 }
+export type LocStatus = 'translating' | 'in_review' | 'rendering' | 'ready' | 'failed';
+export interface Localization { language: string; status: LocStatus; source_lines: string[]; lines: string[]; provider: string; credits: number; error: string | null;
+  project_title: string; source_language: string; glossary: { source: string; target: string }[]; estimate_credits: number }
+export interface GlossaryTerm { id: string; language: string; source: string; target: string }
 export interface Notice { id: string; kind: string; title: string; link: string; read: boolean; created_at: string }
 export interface Meta { languages: string[]; max_video_seconds: number; max_revisions: number; credits_per_minute: number }
 
-export const ACTIVE: ProjectStatus[] = ['moderating', 'writing_script', 'generating'];
+export const ACTIVE: ProjectStatus[] = ['moderating', 'ingesting', 'writing_script', 'generating', 'rights_review'];
 export const badgeFor: Record<ProjectStatus, 'queued' | 'running' | 'succeeded' | 'failed' | 'review' | 'draft'> = {
-  moderating: 'running', writing_script: 'running', generating: 'running', awaiting_approval: 'review', in_review: 'review',
+  moderating: 'running', ingesting: 'running', rights_review: 'review', writing_script: 'running', generating: 'running', awaiting_approval: 'review', in_review: 'review',
   completed: 'succeeded', failed: 'failed', blocked: 'failed', insufficient_credits: 'failed', cancelled: 'draft',
 };

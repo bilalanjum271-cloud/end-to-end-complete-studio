@@ -80,15 +80,21 @@ def subtitles(cues: list[tuple[int, int, str]]) -> tuple[str, str]:
     return srt, vtt
 
 
-def assemble(segments: list[tuple[str, str]], srt_path: str, out_path: str, watermark: str | None) -> None:
+def assemble(segments: list[tuple[str, str]], srt_path: str, out_path: str, watermark: str | None, fit_video_to_audio: bool = False, language: str = "eng") -> None:
     """Stitches (video, audio) scene pairs, levels the audio (EBU R128), embeds a subtitle track
     and, when the plan requires it, burns the watermark."""
     with tempfile.TemporaryDirectory() as tmp:
         parts = []
         for i, (video, audio) in enumerate(segments):
             part = os.path.join(tmp, f"part{i}.mp4")
-            run(["ffmpeg", "-y", "-i", video, "-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
-                 "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-shortest", part])
+            if fit_video_to_audio:
+                # Dubbed narration rarely matches the original length: hold the last frame so speech is never cut.
+                run(["ffmpeg", "-y", "-i", video, "-i", audio, "-filter_complex", "[0:v]tpad=stop_mode=clone:stop_duration=120[v]",
+                     "-map", "[v]", "-map", "1:a:0", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                     "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-shortest", part])
+            else:
+                run(["ffmpeg", "-y", "-i", video, "-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+                     "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-shortest", part])
             parts.append(part)
         listing = os.path.join(tmp, "list.txt")
         Path(listing).write_text("".join(f"file '{p}'\n" for p in parts))
@@ -100,5 +106,14 @@ def assemble(segments: list[tuple[str, str]], srt_path: str, out_path: str, wate
              "-map", "0:v:0", "-map", "0:a:0", "-map", "1:0", *vf,
              "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
              "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
-             "-c:s", "mov_text", "-metadata:s:s:0", "language=eng",
+             "-c:s", "mov_text", "-metadata:s:s:0", f"language={language}",
              "-metadata", "comment=AI-generated with Xen Studio", "-movflags", "+faststart", out_path])
+
+
+def add_music(video: str, music: str, out_path: str) -> None:
+    """Mixes a music bed under the narration. The bed ducks (sidechain compression) whenever someone speaks."""
+    run(["ffmpeg", "-y", "-i", video, "-i", music, "-filter_complex",
+         "[1:a]volume=0.35[bed];[bed][0:a]sidechaincompress=threshold=0.03:ratio=10:attack=15:release=400[ducked];"
+         "[0:a][ducked]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-16:TP=-1.5:LRA=11[a]",
+         "-map", "0:v:0", "-map", "[a]", "-map", "0:s?", "-c:v", "copy", "-c:s", "copy", "-c:a", "aac", "-b:a", "160k", "-ar", "44100",
+         "-movflags", "+faststart", out_path])

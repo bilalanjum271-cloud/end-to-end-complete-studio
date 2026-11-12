@@ -66,8 +66,16 @@ func DefaultRoutes() []Route {
 		{Prefix: "/v1/me", Upstream: "identity"},
 		{Prefix: "/v1/workspaces", Upstream: "identity"},
 		{Prefix: "/v1/credits", Upstream: "ledger"},
+		{Prefix: "/v1/billing/webhook", Upstream: "identity", Public: true, PublicRPM: 600},
+		{Prefix: "/v1/billing/", Upstream: "identity"},
 		{Prefix: "/v1/projects", Upstream: "studio"},
 		{Prefix: "/v1/notifications", Upstream: "studio"},
+		{Prefix: "/v1/glossary", Upstream: "studio"},
+		{Prefix: "/v1/review-queue", Upstream: "studio"},
+		{Prefix: "/v1/admin/", Upstream: "studio"},
+		{Prefix: "/v1/style-profiles", Upstream: "studio"},
+		{Prefix: "/v1/consents", Upstream: "studio"},
+		{Prefix: "/v1/xr/", Upstream: "studio"},
 	}
 }
 

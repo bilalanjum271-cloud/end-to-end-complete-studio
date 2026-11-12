@@ -5,6 +5,7 @@ Every query is scoped by workspace_id. Every write requires an Idempotency-Key.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -30,12 +31,39 @@ class Actor(BaseModel):
     workspace_id: str
     role: str
     plan: str
+    platform_role: str = "user"  # filled from the database by admin endpoints, never from headers
+
+
+class Character(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    description: str = Field(default="", max_length=300)
 
 
 class CreateProject(BaseModel):
-    prompt: str = Field(min_length=10, max_length=4000)
+    """Script-to-Video: dashboard_type=video, source_type=prompt.
+    Animation: dashboard_type=animation, source_type=text (prompt holds the user's text) or link (source_url + rights attestation)."""
+    dashboard_type: Literal["video", "animation"] = "video"
+    source_type: Literal["prompt", "text", "link"] = "prompt"
+    prompt: str = Field(default="", max_length=20000)
+    source_url: str | None = Field(default=None, max_length=2000)
+    rights_attested: bool = False
     language: str = Field(default="en", pattern="^[a-z]{2}$")
     target_seconds: int = Field(ge=10, le=3600)
+    style_profile: str | None = Field(default=None, max_length=40)
+    characters: list[Character] = Field(default_factory=list, max_length=8)
+    music: Literal["none", "calm", "uplifting", "tense"] = "none"
+    voice: str = Field(default="", max_length=80)
+    consent_record_id: str | None = None
+
+
+class Consent(BaseModel):
+    kind: Literal["voice_clone", "face_clone"]
+    subject_name: str = Field(min_length=2, max_length=120)
+    statement: str = Field(min_length=20, max_length=2000)
+
+
+RIGHTS_STATEMENT = ("I own this content or hold the rights needed to adapt it, and I accept responsibility for its use. "
+                    "I understand Xen Studio may hold or remove projects that infringe others' rights.")
 
 
 class Estimate(BaseModel):
@@ -61,6 +89,20 @@ class ExportRequest(BaseModel):
 
 class MarkRead(BaseModel):
     ids: list[str] = Field(default_factory=list, max_length=200)  # empty = mark everything read
+
+
+class GlossaryTerm(BaseModel):
+    language: str = Field(pattern="^[a-z]{2}$")
+    source: str = Field(min_length=1, max_length=120)
+    target: str = Field(min_length=1, max_length=120)
+
+
+class LocalizeRequest(BaseModel):
+    language: str = Field(pattern="^[a-z]{2}$")
+
+
+class ApproveLocalization(BaseModel):
+    lines: list[str] = Field(min_length=1, max_length=100)
 
 
 class Review(BaseModel):
@@ -135,7 +177,8 @@ def create_app() -> FastAPI:
     def summary(p: dict) -> dict:
         return {k: (str(p[k]) if k in ("id", "created_at", "updated_at") else p[k]) for k in
                 ("id", "title", "prompt", "language", "target_seconds", "status", "error", "estimate_credits", "script_version",
-                 "render_version", "revision_round", "max_revisions", "watermark", "created_at", "updated_at")}
+                 "render_version", "revision_round", "max_revisions", "watermark", "created_at", "updated_at",
+                 "dashboard_type", "source_type", "source_url", "style_profile", "characters", "music", "voice")}
 
     @app.get("/healthz", response_class=PlainTextResponse)
     def healthz():
@@ -165,22 +208,58 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "Idempotency-Key header is required")
         if body.language not in LANGUAGES:
             raise HTTPException(400, f"language must be one of {', '.join(LANGUAGES)}")
+        prompt = body.prompt.strip()
+        if body.dashboard_type == "video" and body.source_type != "prompt":
+            raise HTTPException(400, "Script-to-Video starts from a prompt")
+        if body.dashboard_type == "animation" and body.source_type == "prompt":
+            raise HTTPException(400, "Animation starts from your text or a link to content you own")
+        if body.source_type in ("prompt", "text") and len(prompt) < 10:
+            raise HTTPException(400, "describe the video in at least 10 characters")
+        if body.source_type == "link":
+            from urllib.parse import urlparse
+            u = urlparse(body.source_url or "")
+            if u.scheme not in ("http", "https") or not u.hostname:
+                raise HTTPException(400, "source_url must be an http(s) link")
+            if not body.rights_attested:
+                raise HTTPException(400, "confirm that you own this content or hold the rights to adapt it")
+            prompt = prompt or body.source_url
         with deps.db() as conn:
             q = quote(conn, a.workspace_id, body.target_seconds)
+            plan = plan_of(conn, a.workspace_id)
             if not q["within_plan"]:
                 raise HTTPException(403, f"your plan allows videos up to {q['max_video_seconds'] // 60} minutes")
+            if body.dashboard_type == "animation" and plan["animation_access"] == "none":
+                raise HTTPException(403, "your plan does not include the Animation Studio")
+            if body.style_profile and not conn.execute("SELECT 1 FROM style_profiles WHERE id=%s AND workspace_id IN (%s,'00000000-0000-0000-0000-000000000000')",
+                                                       (body.style_profile, a.workspace_id)).fetchone():
+                raise HTTPException(400, "unknown style profile")
+            if body.voice.startswith("clone:"):
+                # cloned voices need a stored, unrevoked consent record from the person being cloned
+                ok = body.consent_record_id and conn.execute("SELECT 1 FROM consent_records WHERE workspace_id=%s AND id::text=%s AND kind='voice_clone' AND revoked_at IS NULL",
+                                                             (a.workspace_id, body.consent_record_id)).fetchone()
+                if not ok:
+                    raise HTTPException(403, "a cloned voice needs a consent record from the person whose voice it is")
             pid = str(uuid.uuid4())
-            title = body.prompt.strip()[:80]
+            rights_id = None
+            if body.source_type == "link":
+                existing = conn.execute("SELECT rights_record_id FROM projects WHERE workspace_id=%s AND idempotency_key=%s", (a.workspace_id, idempotency_key)).fetchone()
+                rights_id = existing["rights_record_id"] if existing else str(uuid.uuid4())
+                if not existing:
+                    conn.execute("INSERT INTO rights_records (workspace_id,id,source_url,attestation,user_id,ip) VALUES (%s,%s,%s,%s,%s,%s)",
+                                 (a.workspace_id, rights_id, body.source_url, RIGHTS_STATEMENT, a.user_id, (request.headers.get("x-forwarded-for") or "").split(",")[-1].strip() or None))
+            title = (prompt if body.source_type != "link" else body.source_url or "")[:80]
             row = conn.execute(
-                """INSERT INTO projects (workspace_id,id,dashboard_type,title,prompt,language,target_seconds,status,estimate_credits,max_revisions,watermark,created_by,idempotency_key)
-                   VALUES (%s,%s,'video',%s,%s,%s,%s,'moderating',%s,%s,%s,%s,%s)
+                """INSERT INTO projects (workspace_id,id,dashboard_type,title,prompt,language,target_seconds,status,estimate_credits,max_revisions,watermark,created_by,idempotency_key,
+                                         source_type,source_url,rights_record_id,style_profile,characters,music,voice,consent_record_id)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,'moderating',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                    ON CONFLICT (workspace_id, idempotency_key) DO NOTHING RETURNING *""",
-                (a.workspace_id, pid, title, body.prompt.strip(), body.language, body.target_seconds, q["credits"], q["max_revisions"], q["watermark"], a.user_id, idempotency_key)).fetchone()
+                (a.workspace_id, pid, body.dashboard_type, title, prompt, body.language, body.target_seconds, q["credits"], q["max_revisions"], q["watermark"], a.user_id, idempotency_key,
+                 body.source_type, body.source_url, rights_id, body.style_profile, json.dumps([c.model_dump() for c in body.characters]), body.music, body.voice, body.consent_record_id)).fetchone()
             replayed = row is None
             if replayed:  # same key: return the project the first request created
                 row = conn.execute("SELECT * FROM projects WHERE workspace_id=%s AND idempotency_key=%s", (a.workspace_id, idempotency_key)).fetchone()
                 fingerprint = hashlib.sha256(json.dumps([row["prompt"], row["language"], row["target_seconds"]]).encode()).hexdigest()
-                if fingerprint != hashlib.sha256(json.dumps([body.prompt.strip(), body.language, body.target_seconds]).encode()).hexdigest():
+                if fingerprint != hashlib.sha256(json.dumps([prompt, body.language, body.target_seconds]).encode()).hexdigest():
                     raise HTTPException(409, "Idempotency-Key was already used with a different request")
             else:
                 conn.execute("INSERT INTO outbox (workspace_id,id,topic,event_type,payload) VALUES (%s,%s,'script.requested','script.requested',%s)",
@@ -190,10 +269,10 @@ def create_app() -> FastAPI:
         return JSONResponse(summary(row), status_code=200 if replayed else 201)
 
     @app.get("/v1/projects")
-    def list_projects(a: Actor = Depends(actor), limit: int = 50):
+    def list_projects(a: Actor = Depends(actor), limit: int = 50, dashboard: Literal["video", "animation"] = "video"):
         with deps.db() as conn:
-            rows = conn.execute("SELECT * FROM projects WHERE workspace_id=%s AND dashboard_type='video' ORDER BY created_at DESC LIMIT %s",
-                                (a.workspace_id, max(1, min(limit, 100)))).fetchall()
+            rows = conn.execute("SELECT * FROM projects WHERE workspace_id=%s AND dashboard_type=%s ORDER BY created_at DESC LIMIT %s",
+                                (a.workspace_id, dashboard, max(1, min(limit, 100)))).fetchall()
         return {"projects": [summary(r) for r in rows]}
 
     @app.get("/v1/projects/{pid}")
@@ -209,6 +288,7 @@ def create_app() -> FastAPI:
             cost = conn.execute("SELECT COALESCE(sum(cost_microusd),0) AS c FROM jobs WHERE workspace_id=%s AND project_id=%s", (ws, pid)).fetchone()["c"]
             package = conn.execute("SELECT titles, description, tags, thumbnail_key IS NOT NULL AS has_thumbnail FROM publish_packages WHERE workspace_id=%s AND project_id=%s AND render_version=%s",
                                    (ws, pid, p["render_version"])).fetchone()
+            localizations = conn.execute("SELECT language, status, error, credits FROM localizations WHERE workspace_id=%s AND project_id=%s ORDER BY language", (ws, pid)).fetchall()
             exports = conn.execute("SELECT format, status, error FROM exports WHERE workspace_id=%s AND project_id=%s AND render_version=%s ORDER BY format",
                                    (ws, pid, p["render_version"])).fetchall()
         steps = len(scenes) * 2
@@ -219,7 +299,7 @@ def create_app() -> FastAPI:
                 "revisions": [{**r, "created_at": str(r["created_at"])} for r in revisions],
                 "progress": {"percent": round(done / steps * 100) if steps else 0, "steps_done": done, "steps_total": steps,
                              "estimated_seconds_left": remaining * 2 if p["status"] == "generating" else 0, "provider_cost_microusd": int(cost)},
-                "revisions_left": p["max_revisions"] - p["revision_round"], "package": package, "exports": exports}
+                "revisions_left": p["max_revisions"] - p["revision_round"], "package": package, "exports": exports, "localizations": localizations}
 
     async def signal(request: Request, a: Actor, pid: str, expect: str, name: str, data: dict):
         with deps.db() as conn:
@@ -308,6 +388,147 @@ def create_app() -> FastAPI:
             raise HTTPException(404, "export not ready")
         return FileResponse(deps.storage.path(row["storage_key"]), media_type="video/mp4", filename=f"xen-studio-{pid[:8]}-v{version}-{fmt}.mp4")
 
+    # ── animation: style profiles, consent records ───────────────────────────────
+    @app.get("/v1/style-profiles")
+    def style_profiles(a: Actor = Depends(actor)):
+        with deps.db() as conn:
+            rows = conn.execute("SELECT id, name, look, palette, workspace_id::text = '00000000-0000-0000-0000-000000000000' AS preset FROM style_profiles "
+                                "WHERE workspace_id IN (%s, '00000000-0000-0000-0000-000000000000') ORDER BY preset DESC, name", (a.workspace_id,)).fetchall()
+        return {"profiles": rows}
+
+    @app.get("/v1/consents")
+    def consents(a: Actor = Depends(actor)):
+        with deps.db() as conn:
+            rows = conn.execute("SELECT id, kind, subject_name, statement, revoked_at, created_at FROM consent_records WHERE workspace_id=%s ORDER BY created_at DESC", (a.workspace_id,)).fetchall()
+        return {"consents": [{**r, "id": str(r["id"]), "revoked_at": str(r["revoked_at"]) if r["revoked_at"] else None, "created_at": str(r["created_at"])} for r in rows]}
+
+    @app.post("/v1/consents", status_code=201)
+    def add_consent(body: Consent, a: Actor = Depends(editor)):
+        cid = str(uuid.uuid4())
+        with deps.db() as conn:
+            conn.execute("INSERT INTO consent_records (workspace_id,id,kind,subject_name,statement,granted_by) VALUES (%s,%s,%s,%s,%s,%s)",
+                         (a.workspace_id, cid, body.kind, body.subject_name, body.statement, a.user_id))
+            conn.execute("INSERT INTO audit_logs (workspace_id,id,actor_id,action,target,metadata) VALUES (%s,%s,%s,'consent.recorded',%s,%s)",
+                         (a.workspace_id, str(uuid.uuid4()), a.user_id, cid, json.dumps({"kind": body.kind, "subject": body.subject_name})))
+        return {"id": cid}
+
+    @app.delete("/v1/consents/{cid}", status_code=204)
+    def revoke_consent(cid: str, a: Actor = Depends(editor)):
+        try:
+            uuid.UUID(cid)
+        except ValueError:
+            raise HTTPException(404, "consent not found") from None
+        with deps.db() as conn:
+            conn.execute("UPDATE consent_records SET revoked_at=now(), updated_at=now() WHERE workspace_id=%s AND id=%s AND revoked_at IS NULL", (a.workspace_id, cid))
+            conn.execute("INSERT INTO audit_logs (workspace_id,id,actor_id,action,target) VALUES (%s,%s,%s,'consent.revoked',%s)", (a.workspace_id, str(uuid.uuid4()), a.user_id, cid))
+
+    # ── localization ───────────────────────────────────────────────────────────
+    @app.get("/v1/glossary")
+    def glossary(a: Actor = Depends(actor), language: str | None = None):
+        with deps.db() as conn:
+            rows = conn.execute("SELECT id, language, source, target, created_at FROM glossary_terms WHERE workspace_id=%s AND (%s::text IS NULL OR language=%s) ORDER BY language, lower(source)",
+                                (a.workspace_id, language, language)).fetchall()
+        return {"terms": [{**r, "id": str(r["id"]), "created_at": str(r["created_at"])} for r in rows]}
+
+    @app.post("/v1/glossary", status_code=201)
+    def add_term(body: GlossaryTerm, a: Actor = Depends(editor)):
+        if body.language not in LANGUAGES:
+            raise HTTPException(400, f"language must be one of {', '.join(LANGUAGES)}")
+        tid = str(uuid.uuid4())
+        with deps.db() as conn:
+            row = conn.execute("""INSERT INTO glossary_terms (workspace_id,id,language,source,target,created_by) VALUES (%s,%s,%s,%s,%s,%s)
+                                  ON CONFLICT (workspace_id, language, lower(source)) DO UPDATE SET target=excluded.target, updated_at=now() RETURNING id""",
+                               (a.workspace_id, tid, body.language, body.source.strip(), body.target.strip(), a.user_id)).fetchone()
+        return {"id": str(row["id"]), **body.model_dump()}
+
+    @app.delete("/v1/glossary/{tid}", status_code=204)
+    def delete_term(tid: str, a: Actor = Depends(editor)):
+        try:
+            uuid.UUID(tid)
+        except ValueError:
+            raise HTTPException(404, "term not found") from None
+        with deps.db() as conn:
+            conn.execute("DELETE FROM glossary_terms WHERE workspace_id=%s AND id=%s", (a.workspace_id, tid))
+
+    @app.post("/v1/projects/{pid}/localizations", status_code=202)
+    async def create_localization(pid: str, body: LocalizeRequest, request: Request, a: Actor = Depends(editor)):
+        with deps.db() as conn:
+            p = load(conn, a.workspace_id, pid)
+            if p["status"] not in ("in_review", "completed") or not p["render_version"]:
+                raise HTTPException(409, "localize a video after it has rendered")
+            if body.language == p["language"] or body.language not in LANGUAGES:
+                raise HTTPException(400, "choose a supported language different from the original")
+            plan = plan_of(conn, a.workspace_id)
+            used = conn.execute("SELECT count(*) AS n FROM localizations WHERE workspace_id=%s AND project_id=%s", (a.workspace_id, pid)).fetchone()["n"]
+            if plan["max_languages"] is not None and used + 1 >= plan["max_languages"]:
+                raise HTTPException(403, f"your plan allows {plan['max_languages']} languages per video")
+            created = conn.execute("""INSERT INTO localizations (workspace_id,project_id,language,render_version,status,requested_by) VALUES (%s,%s,%s,%s,'translating',%s)
+                                      ON CONFLICT (workspace_id,project_id,language) DO UPDATE SET status='translating', render_version=excluded.render_version, error=NULL, updated_at=now()
+                                        WHERE localizations.status='failed' RETURNING language""", (a.workspace_id, pid, body.language, p["render_version"], a.user_id)).fetchone()
+        if created:
+            await request.app.state.orch.run_task("localize", a.workspace_id, pid, body.language)
+        return {"language": body.language, "status": "translating" if created else "exists"}
+
+    @app.get("/v1/projects/{pid}/localizations/{lang}")
+    def get_localization(pid: str, lang: str, a: Actor = Depends(actor)):
+        with deps.db() as conn:
+            p = load(conn, a.workspace_id, pid)
+            loc = conn.execute("SELECT language, status, source_lines, lines, provider, credits, error, render_version, updated_at FROM localizations WHERE workspace_id=%s AND project_id=%s AND language=%s",
+                               (a.workspace_id, pid, lang)).fetchone()
+            glossary = conn.execute("SELECT source, target FROM glossary_terms WHERE workspace_id=%s AND language=%s ORDER BY lower(source)", (a.workspace_id, lang)).fetchall()
+        if not loc:
+            raise HTTPException(404, "localization not found")
+        estimate = activities.estimate_credits(p["target_seconds"], cfg.credits_per_minute)
+        return {**loc, "updated_at": str(loc["updated_at"]), "project_title": p["title"], "source_language": p["language"],
+                "glossary": glossary, "estimate_credits": max(1, estimate // 2)}
+
+    @app.post("/v1/projects/{pid}/localizations/{lang}/approve", status_code=202)
+    async def approve_localization(pid: str, lang: str, body: ApproveLocalization, request: Request, a: Actor = Depends(editor)):
+        ws = a.workspace_id
+        with deps.db() as conn:
+            p = load(conn, ws, pid)
+            loc = conn.execute("SELECT * FROM localizations WHERE workspace_id=%s AND project_id=%s AND language=%s FOR UPDATE", (ws, pid, lang)).fetchone()
+            if not loc:
+                raise HTTPException(404, "localization not found")
+            if loc["status"] != "in_review":
+                raise HTTPException(409, f"localization is {loc['status']}, expected in_review")
+            if len(body.lines) != len(loc["lines"]):
+                raise HTTPException(400, f"expected {len(loc['lines'])} lines")
+            lines = [x.strip()[:2000] for x in body.lines]
+            if any(not x for x in lines):
+                raise HTTPException(400, "every line needs text")
+            mod, _ = deps.router.call("moderation", "check", text=" ".join(lines))
+            if mod["decision"] == "blocked":
+                raise HTTPException(400, f"edited lines violate the content policy ({mod['reason']})")
+            conn.execute("UPDATE localizations SET lines=%s, reviewed_by=%s, status='rendering', updated_at=now() WHERE workspace_id=%s AND project_id=%s AND language=%s",
+                         (json.dumps(lines), a.user_id, ws, pid, lang))
+        amount = max(1, activities.estimate_credits(p["target_seconds"], cfg.credits_per_minute) // 2)
+        if not await asyncio.to_thread(activities.reserve_localization, ws, pid, lang, amount):
+            with deps.db() as conn:
+                conn.execute("UPDATE localizations SET status='in_review', updated_at=now() WHERE workspace_id=%s AND project_id=%s AND language=%s", (ws, pid, lang))
+            raise HTTPException(402, f"dubbing needs {amount} credits")
+        await request.app.state.orch.run_task("render_localization", ws, pid, lang)
+        return {"language": lang, "status": "rendering", "credits": amount}
+
+    @app.get("/v1/review-queue")
+    def review_queue(a: Actor = Depends(actor)):
+        with deps.db() as conn:
+            rows = conn.execute("""SELECT l.project_id, l.language, l.updated_at, p.title FROM localizations l
+                                   JOIN projects p ON p.workspace_id = l.workspace_id AND p.id = l.project_id
+                                   WHERE l.workspace_id=%s AND l.status='in_review' ORDER BY l.updated_at""", (a.workspace_id,)).fetchall()
+        return {"items": [{**r, "project_id": str(r["project_id"]), "updated_at": str(r["updated_at"])} for r in rows]}
+
+    @app.get("/v1/projects/{pid}/localizations/{lang}/{file}")
+    def localization_file(pid: str, lang: str, file: Literal["video.mp4", "subtitles.srt", "subtitles.vtt"], a: Actor = Depends(actor)):
+        with deps.db() as conn:
+            load(conn, a.workspace_id, pid)
+            loc = conn.execute("SELECT storage_key, subtitles_key FROM localizations WHERE workspace_id=%s AND project_id=%s AND language=%s AND status='ready'",
+                               (a.workspace_id, pid, lang)).fetchone()
+        if not loc:
+            raise HTTPException(404, "localized version not ready")
+        key = loc["storage_key"] if file == "video.mp4" else loc["subtitles_key"] if file == "subtitles.srt" else loc["subtitles_key"][:-3] + "vtt"
+        return FileResponse(deps.storage.path(key), media_type={"video.mp4": "video/mp4", "subtitles.srt": "application/x-subrip", "subtitles.vtt": "text/vtt"}[file])
+
     # ── notifications (in-app feed; scoped to the caller inside the current workspace) ──
     @app.get("/v1/notifications")
     def notifications(a: Actor = Depends(actor), limit: int = 30):
@@ -330,5 +551,10 @@ def create_app() -> FastAPI:
             else:
                 conn.execute("UPDATE notifications SET read_at=now(), updated_at=now() WHERE workspace_id=%s AND user_id=%s AND read_at IS NULL", (a.workspace_id, a.user_id))
         return {"ok": True}
+
+    from . import admin
+    app.include_router(admin.build(deps, actor))
+    from . import xr
+    app.include_router(xr.build(deps, actor, editor, plan_of))
 
     return app

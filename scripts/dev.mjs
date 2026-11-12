@@ -32,6 +32,7 @@ const procs = [
   ['gateway', join(root, 'bin', `gateway${exe}`), [], root],
   ['identity', 'node', ['dist/src/main.js'], join(root, 'services', 'identity')],
   ['studio', process.env.PYTHON ?? (process.platform === 'win32' ? 'python' : 'python3'), ['-m', 'xen_studio.api.main'], join(root, 'services', 'studio')],
+  ['relay', process.env.PYTHON ?? (process.platform === 'win32' ? 'python' : 'python3'), ['-m', 'xen_studio.events.relay'], join(root, 'services', 'studio')],
   ['web', 'pnpm', ['--filter', '@xen-studio/web', prod ? 'start' : 'dev'], root],
 ].map(([name, cmd, args, cwd]) => {
   const p = spawn(cmd, args, { cwd, env, stdio: 'inherit', shell: process.platform === 'win32' && (cmd === 'pnpm') });

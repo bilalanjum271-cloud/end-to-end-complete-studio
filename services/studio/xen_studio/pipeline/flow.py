@@ -26,6 +26,15 @@ async def script_to_video(h: Host, ws: str, pid: str) -> str:
     try:
         if (await h.act("moderate_prompt", ws, pid))["decision"] == "blocked":
             return "blocked"
+        rights = await h.act("ingest_source", ws, pid)
+        if rights == "review":  # held for a human rights decision (Admin moderation queue)
+            sig = await h.wait_signal(APPROVAL_TIMEOUT_S)
+            approved = bool(sig and sig[0] == "rights_decision" and sig[1].get("approved"))
+            await h.act("rights_decided", ws, pid, approved)
+            if not approved:
+                return "blocked"
+        elif rights == "rejected":
+            return "blocked"
         if not (await h.act("reserve_credits", ws, pid))["ok"]:
             return "insufficient_credits"
         reserved = True
@@ -59,6 +68,7 @@ async def script_to_video(h: Host, ws: str, pid: str) -> str:
                 await h.act("settle_credits", ws, pid, "release", "output blocked by moderation")
                 return "blocked"
             await h.act("package_render", ws, pid)
+            await h.act("finish", ws, pid, "in_review", None)
             await h.act("notify", ws, pid, "video_ready")
             while True:
                 sig = await h.wait_signal(REVIEW_TIMEOUT_S)

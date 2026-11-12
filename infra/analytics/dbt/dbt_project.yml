@@ -1,0 +1,8 @@
+name: xen_studio
+version: "0.1.0"
+profile: xen_studio
+model-paths: ["models"]
+models:
+  xen_studio:
+    staging: { +materialized: view }
+    marts: { +materialized: table, +file_format: iceberg }

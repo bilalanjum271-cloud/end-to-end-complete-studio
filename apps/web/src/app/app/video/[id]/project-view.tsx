@@ -1,11 +1,12 @@
 'use client';
-import { Ban, Check, CircleAlert, Coins, Copy, Crop, Download, FileText, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react';
+import { Ban, Check, Scale, CircleAlert, Coins, Copy, Crop, Download, FileText, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, useTransition, type ReactNode } from 'react';
 import { Button, EmptyState, Input, Progress, Skeleton, StatusBadge, useToast } from '@xen-studio/ui';
 import { useI18n } from '@/components/i18n-provider';
 import { ACTIVE, badgeFor, type Project, type StepStatus } from '@/lib/projects';
+import { Languages } from './languages';
 import { acceptVideo, approveScript, cancelProject, regenerateScript, requestExport, reviseScenes } from '../actions';
 
 const stepBadge: Record<StepStatus, 'queued' | 'running' | 'succeeded' | 'failed'> = { queued: 'queued', running: 'running', succeeded: 'succeeded', failed: 'failed' };
@@ -43,7 +44,8 @@ export function ProjectView({ initial }: { initial: Project }) {
   const [expect, setExpect] = useState<string | null>(null); // optimistic: keep polling until the status moves on
   const [busy, start] = useTransition();
 
-  const exporting = p.exports?.some((e) => e.status === 'queued' || e.status === 'running') ?? false;
+  const exporting = (p.exports?.some((e) => e.status === 'queued' || e.status === 'running') ?? false)
+    || (p.localizations?.some((l) => l.status === 'translating' || l.status === 'rendering') ?? false);
   const live = ACTIVE.includes(p.status) || expect !== null || exporting;
   useEffect(() => {
     if (!live) return;
@@ -55,14 +57,14 @@ export function ProjectView({ initial }: { initial: Project }) {
         if (res.ok && !stop) {
           const next = (await res.json()) as Project;
           setP(next);
-          if (expect === 'export') { if (next.exports.length) setExpect(null); }
+          if (expect === 'export') { if (next.exports.length !== p.exports.length || next.localizations.length !== p.localizations.length) setExpect(null); }
           else if (expect && (next.status !== expect || next.render_version !== p.render_version || next.script_version !== p.script_version)) setExpect(null);
         }
       } catch { /* transient: next tick retries */ }
     };
     const timer = setInterval(tick, 1500);
     return () => { stop = true; clearInterval(timer); };
-  }, [live, p.id, p.render_version, p.script_version, expect, router]);
+  }, [live, p.id, p.render_version, p.script_version, p.exports.length, p.localizations.length, expect, router]);
 
   const run = (fn: () => Promise<{ ok: boolean }>, from: string) =>
     start(async () => {
@@ -76,7 +78,7 @@ export function ProjectView({ initial }: { initial: Project }) {
   const waiting = busy || (expect !== null && expect !== 'export');
 
   let body: ReactNode;
-  if (p.status === 'moderating' || p.status === 'writing_script') {
+  if (p.status === 'moderating' || p.status === 'ingesting' || p.status === 'writing_script') {
     body = (
       <div className="flex flex-col gap-4" aria-busy="true">
         <p className="text-base text-fg-muted" role="status">{t('project.writing')}</p>
@@ -190,6 +192,7 @@ export function ProjectView({ initial }: { initial: Project }) {
         ) : (
           <p className="flex items-center gap-2 text-base text-fg-muted"><Check className="size-4 text-accent-text" aria-hidden />{t('project.completed', { credits: p.estimate_credits })}</p>
         )}
+        <Languages p={p} onStarted={() => { setExpect('export'); router.refresh(); }} />
         <section aria-labelledby="formats" className="flex flex-col gap-4 rounded-lg bg-surface-1 p-4 sm:p-6">
           <div>
             <h2 id="formats" className="text-md font-semibold text-fg">{t('export.title')}</h2>
@@ -240,6 +243,8 @@ export function ProjectView({ initial }: { initial: Project }) {
         </div>
       </div>
     );
+  } else if (p.status === 'rights_review') {
+    body = <EmptyState icon={<Scale className="size-6" aria-hidden />} title={t('project.rights')} description={t('project.rights.body', { reason: p.error ?? '' })} />;
   } else if (p.status === 'blocked') {
     body = <EmptyState icon={<Ban className="size-6" aria-hidden />} title={t('project.blocked')} description={t('project.blocked.body', { reason: p.error ?? '' })} />;
   } else if (p.status === 'insufficient_credits') {

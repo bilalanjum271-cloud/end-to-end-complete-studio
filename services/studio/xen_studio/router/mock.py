@@ -109,7 +109,39 @@ def _llm(provider: str):
                 "description": f"{first} A short, clear look at {low}.\n\nMade with Xen Studio. This video contains AI-generated content.",
                 "tags": tags}, 500
 
-    return {"research": research, "write_script": write_script, "rewrite_scene": rewrite_scene, "package": package}
+    def adapt(text: str, language: str, target_seconds: int, title_hint: str = ""):
+        """Mock adaptation: splits the user's own text into scenes by sentence, trimmed to the target length.
+        A real LLM rewrites it for narration; the mock never invents content."""
+        _maybe_fail("llm", provider)
+        sentences = [x.strip() for x in re.split(r"(?<=[.!?۔])\s+", re.sub(r"\s+", " ", text.strip())) if x.strip()]
+        budget = int(target_seconds * 2.3)
+        kept, words = [], 0
+        for x in sentences:
+            if kept and words + len(x.split()) > budget:
+                break
+            kept.append(x)
+            words += len(x.split())
+        n = max(2, min(12, round(target_seconds / 8), len(kept)))
+        n = min(n, len(kept)) if len(kept) >= 2 else 2
+        if len(kept) < 2:
+            kept = (kept or [text[:200] or "Untitled."]) + ["The end."]
+        groups = [kept[i * len(kept) // n:(i + 1) * len(kept) // n] for i in range(n)]
+        scenes = [{"narration": " ".join(g), "visual": " ".join(g)[:160]} for g in groups if g]
+        title = title_hint or sentences[0][:60] if sentences else "Untitled"
+        return {"title": title.rstrip(".")[:80], "scenes": scenes, "language": language}, 1500 * len(scenes)
+
+    def translate(texts: list[str], source: str, target: str, glossary: list[dict]):
+        """Mock translation: cannot translate, so it applies the glossary and tags each line with the target language.
+        Real translation needs an LLM key."""
+        _maybe_fail("llm", provider)
+        out = []
+        for t in texts:
+            for g in glossary:
+                t = re.sub(re.escape(g["source"]), g["target"], t, flags=re.I)
+            out.append(f"[{target}] {t}")
+        return out, 300 * len(texts)
+
+    return {"research": research, "write_script": write_script, "rewrite_scene": rewrite_scene, "package": package, "translate": translate, "adapt": adapt}
 
 
 def _has_flite() -> bool:
@@ -141,10 +173,12 @@ PALETTE = ["0x10161d", "0x161b26", "0x1a1f1c", "0x1d1a22", "0x201c18", "0x14201f
 
 
 def _visual(provider: str):
-    def render(visual_prompt: str, seed: int, seconds: float, width: int, height: int, out_path: str):
+    def render(visual_prompt: str, seed: int, seconds: float, width: int, height: int, out_path: str, style: dict | None = None):
         _maybe_fail("visual", provider)
         color = PALETTE[seed % len(PALETTE)]
         accent = ["0x46d6a0", "0x7fb4ff", "0xf2b84b"][seed % 3]
+        if style and style.get("palette"):
+            return _animated(visual_prompt, seed, seconds, width, height, out_path, style["palette"])
         caption = "\n".join(textwrap.wrap(re.sub(r"[^A-Za-z0-9 ,.?!()-]", "", visual_prompt), 34)[:4])
         capfile = out_path + ".txt"
         with open(capfile, "w") as f:
@@ -158,6 +192,76 @@ def _visual(provider: str):
             raise ProviderError(f"visual render failed: {proc.stderr.strip()[-200:]}")
         return {"path": out_path}, int(seconds * 40_000)
     return render
+
+
+def _animated(visual_prompt: str, seed: int, seconds: float, width: int, height: int, out_path: str, palette: list[str]):
+    """Mock animation: the style's palette with shapes drifting across the frame and the scene caption.
+    Stands in for a real image or video model; motion and colors follow the style profile."""
+    bg, a1, a2 = (palette + palette)[:3]
+    caption = "\n".join(textwrap.wrap(re.sub(r"[^A-Za-z0-9 ,.?!()-]", "", visual_prompt), 34)[:3])
+    capfile = out_path + ".txt"
+    with open(capfile, "w") as f:
+        f.write(caption)
+    s = seconds
+    off = seed % 97
+    vf = (f"drawbox=x='mod(t*{90 + off}+{off * 7},iw+200)-200':y=ih*0.18:w=200:h=200:color={a1}@0.85:t=fill,"
+          f"drawbox=x='iw-mod(t*{60 + off}+{off * 3},iw+300)':y=ih*0.58:w=300:h=120:color={a2}@0.7:t=fill,"
+          f"drawbox=x=0:y=ih-8:w=iw*t/{s:.3f}:h=8:color={a1}@0.9:t=fill,"
+          f"drawtext=textfile={capfile}:fontcolor=white:fontsize={height // 16}:line_spacing=12:x=(w-text_w)/2:y=h*0.42:box=1:boxcolor=black@0.35:boxborderw=16")
+    proc = subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c={bg}:s={width}x{height}:r=24:d={s:.3f}", "-vf", vf,
+                           "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", out_path], capture_output=True, text=True, timeout=180)
+    if proc.returncode != 0:
+        raise ProviderError(f"animation render failed: {proc.stderr.strip()[-200:]}")
+    return {"path": out_path}, int(seconds * 50_000)
+
+
+MOODS = {"calm": (220.0, 277.18, 329.63), "uplifting": (261.63, 329.63, 392.0), "tense": (196.0, 233.08, 277.18)}
+
+
+def _music(provider: str):
+    def compose(seconds: float, mood: str, out_path: str):
+        """Mock music: a soft three-note pad in the mood's chord with a slow swell. Stands in for a music model."""
+        _maybe_fail("music", provider)
+        f1, f2, f3 = MOODS.get(mood, MOODS["calm"])
+        expr = f"0.18*(sin(2*PI*{f1}*t)+0.8*sin(2*PI*{f2}*t)+0.6*sin(2*PI*{f3}*t))*(0.6+0.4*sin(2*PI*t/8))"
+        proc = subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"aevalsrc={expr}:s=44100:d={seconds:.2f}", "-af", "afade=t=in:d=1.5,lowpass=f=1800",
+                               "-ac", "2", out_path], capture_output=True, text=True, timeout=120)
+        if proc.returncode != 0:
+            raise ProviderError("music render failed")
+        return {"path": out_path}, int(seconds * 1000)
+    return compose
+
+
+PUBLISHER_HOSTS = ("netflix.com", "disneyplus.com", "hbomax.com", "max.com", "primevideo.com", "hulu.com", "spotify.com",
+                   "music.apple.com", "crunchyroll.com", "paramountplus.com", "peacocktv.com")
+
+
+def _rights(provider: str):
+    def check(url: str, text: str):
+        """Mock copyright screen: links to major commercial catalogs are held for human review; everything else is
+        cleared on the user's ownership attestation. A real adapter calls a fingerprinting / content-ID vendor."""
+        _maybe_fail("rights", provider)
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").lower()
+        if any(host == h or host.endswith("." + h) for h in PUBLISHER_HOSTS):
+            return {"result": "needs_review", "reason": f"{host} hosts commercially licensed media"}, 50
+        if not text.strip():
+            return {"result": "rejected", "reason": "no readable content at the link"}, 50
+        return {"result": "clear", "reason": "owner attestation on file; no catalog match"}, 50
+    return check
+
+
+def _ingest(provider: str):
+    def fetch(url: str):
+        """Mock ingestion: deterministic article text derived from the URL (no network)."""
+        _maybe_fail("ingest", provider)
+        from urllib.parse import urlparse
+        u = urlparse(url)
+        topic = re.sub(r"[-_/]+", " ", (u.path or "").strip("/")).strip() or (u.hostname or "this page")
+        return {"title": topic[:80].title(), "text": (f"This story is about {topic}. It begins with a simple question. "
+                f"The people involved had no idea how far it would go. Step by step, the answer became clear. "
+                f"In the end, {topic} changed the way they worked. And that is why it is worth telling.")}, 100
+    return fetch
 
 
 def _qc(provider: str):
@@ -185,14 +289,50 @@ def _notify(provider: str, channel: str):
     return send
 
 
-def default_router() -> ModelRouter:
-    r = ModelRouter()
+def _three_d(provider: str):
+    def generate(prompt: str, out_path: str):
+        _maybe_fail("3d", provider)
+        from ..xr.generate import compose
+        from ..xr.glb import write_glb
+        kind, parts = compose(prompt)
+        info = write_glb(parts, out_path, name=kind)
+        return {"path": out_path, "kind": kind, **info}, 20_000
+    return generate
+
+
+def mock_adapters() -> list[Adapter]:
+    out = []
     for name in ("mock-primary", "mock-secondary"):
-        r.register(Adapter(name, "moderation", "mock-policy-1", {"check": _moderate(name)}))
-        r.register(Adapter(name, "llm", "mock-writer-1", _llm(name)))
-        r.register(Adapter(name, "tts", "mock-flite-1", {"speak": _tts(name)}))
-        r.register(Adapter(name, "visual", "mock-titlecard-1", {"render": _visual(name)}))
-        r.register(Adapter(name, "qc", "mock-probe-1", {"score": _qc(name)}))
-        r.register(Adapter(name, "email", "mock-smtp-1", {"send": _notify(name, "email")}))
-        r.register(Adapter(name, "push", "mock-push-1", {"send": _notify(name, "push")}))
+        out += [Adapter(name, "moderation", "mock-policy-1", {"check": _moderate(name)}),
+                Adapter(name, "llm", "mock-writer-1", _llm(name)),
+                Adapter(name, "tts", "mock-flite-1", {"speak": _tts(name)}),
+                Adapter(name, "visual", "mock-titlecard-1", {"render": _visual(name)}),
+                Adapter(name, "qc", "mock-probe-1", {"score": _qc(name)}),
+                Adapter(name, "email", "mock-smtp-1", {"send": _notify(name, "email")}),
+                Adapter(name, "push", "mock-push-1", {"send": _notify(name, "push")}),
+                Adapter(name, "music", "mock-pad-1", {"compose": _music(name)}),
+                Adapter(name, "rights", "mock-catalog-1", {"check": _rights(name)}),
+                Adapter(name, "ingest", "mock-reader-1", {"fetch": _ingest(name)}),
+                Adapter(name, "3d", "mock-primitives-1", {"generate": _three_d(name)})]
+    return out
+
+
+def default_router() -> ModelRouter:
+    """MODEL_ROUTER_MODE:
+      auto (default)  each capability uses its real providers when keys are set, otherwise the mocks.
+                      Mocks never act as failover behind a real provider: a customer must not silently get mock output.
+      mock            mocks only (tests, demos, CI)
+      live            real providers only; a capability with no key fails loudly
+    """
+    from .real import real_adapters
+    mode = os.environ.get("MODEL_ROUTER_MODE", "auto").lower()
+    real = [] if mode == "mock" else real_adapters()
+    with_real = {a.capability for a in real}
+    r = ModelRouter()
+    for a in real:
+        r.register(a)
+    if mode != "live":
+        for a in mock_adapters():
+            if a.capability not in with_real:
+                r.register(a)
     return r

@@ -82,6 +82,19 @@ async def until(client, h, pid, statuses, timeout=90):
     raise AssertionError(f"project stuck in {p['status']}: {p.get('error')}")
 
 
+async def until_render(client, h, pid, version, timeout=90):
+    """Waits for a specific render version to be ready for review (avoids reading the previous render)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        p = (await client.get(f"/v1/projects/{pid}", headers=h)).json()
+        if p["render_version"] >= version and p["status"] == "in_review":
+            return p
+        if p["status"] == "failed":
+            raise AssertionError(p["error"])
+        await asyncio.sleep(0.2)
+    raise AssertionError(f"render v{version} never arrived (at v{p['render_version']}, {p['status']})")
+
+
 def client_for(app):
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://studio")
 
@@ -181,21 +194,14 @@ async def test_prompt_to_reviewed_video_with_revision_limit_and_exact_credit_acc
         # revision round 1: only scene 2 is regenerated
         r = await c.post(f"/v1/projects/{pid}/review", headers=h, json={"action": "revise", "scene_positions": [2], "feedback": "simpler wording"})
         assert r.status_code == 200
-        await until(c, h, pid, {"generating", "in_review"})
-        p = await until(c, h, pid, {"in_review"})
-        if p["render_version"] == 1:
-            await asyncio.sleep(1); p = await until(c, h, pid, {"in_review"})
+        p = await until_render(c, h, pid, 2)
         assert p["render_version"] == 2 and p["revision_round"] == 1 and p["revisions_left"] == 1
         assert [s["generation"] for s in p["scenes"]] == [0, 1, 0, 0]
         assert p["scenes"][1]["narration"].startswith("Put simply,")
 
         # round 2 is allowed on Starter, round 3 is refused
         assert (await c.post(f"/v1/projects/{pid}/review", headers=h, json={"action": "revise", "scene_positions": [1, 3]})).status_code == 200
-        for _ in range(100):
-            p = (await c.get(f"/v1/projects/{pid}", headers=h)).json()
-            if p["render_version"] == 3 and p["status"] == "in_review":
-                break
-            await asyncio.sleep(0.2)
+        p = await until_render(c, h, pid, 3)
         assert p["render_version"] == 3 and p["revisions_left"] == 0
         refused = await c.post(f"/v1/projects/{pid}/review", headers=h, json={"action": "revise", "scene_positions": [1]})
         assert refused.status_code == 403 and "revision rounds" in refused.json()["error"]["message"]

@@ -5,7 +5,7 @@ import { AppModule } from './app.module';
 import { CONFIG, Config } from './config';
 
 async function main() {
-  const app = await NestFactory.create(AppModule, { logger: ['log', 'warn', 'error'] });
+  const app = await NestFactory.create(AppModule, { logger: ['log', 'warn', 'error'], rawBody: true }); // raw body: webhook signatures
   app.enableShutdownHooks();
   const doc = SwaggerModule.createDocument(app, new DocumentBuilder().setTitle('Xen Studio Identity').setVersion('0.1.0').addBearerAuth().build());
   SwaggerModule.setup('docs', app, doc);

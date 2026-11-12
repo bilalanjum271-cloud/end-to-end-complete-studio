@@ -1,7 +1,7 @@
 # Xen Studio — build progress
 
 Resume rule: continue from the **first unchecked item**. A box is ticked only if the thing was actually run
-and passed; "written, not run" items stay unchecked with a note. Last updated: 2026-11-12 (session 3).
+and passed; "written, not run" items stay unchecked with a note. Last updated: 2026-11-12 (session 4).
 
 ## Blockers a human must resolve
 - Note on order: the remaining Phase 1 and Phase 2 items need Docker (Kafka, Temporal, MinIO, Helm) or real provider
@@ -112,7 +112,11 @@ File plan: `services/studio/xen_studio/{router,pipeline,api}` (Python) · `infra
       run the UI flow, then tick this box
 
 ### Not built yet (remaining Phase 2 work, in order)
-- [ ] Real provider adapters (LLM, ElevenLabs / Google / Azure TTS, video aggregator, image, moderation, vision QC) — need API keys
+- [x] Real provider adapters, switched on by API keys: OpenAI + Anthropic (LLM), OpenAI (moderation), ElevenLabs + OpenAI (TTS),
+      OpenAI Images + Stability (visuals, animated push-in), Resend (email), Meshy (text-to-3D), web page ingestion.
+      Tested against simulated vendor responses (request shape, parsing, cost, failover, 429/5xx/timeouts); **never called a real API**
+- [ ] Live verification with real keys (add keys to `.env`, run one video per provider, compare quality and cost)
+- [ ] Vision-based QC adapter; a text-to-video provider (Runway / Kling / Veo) — the visual capability uses still images today
 - [ ] Web research with cited sources (mock returns placeholder notes); script structure presets per format
 - [ ] WebSocket live progress via Kafka (UI polls every 1.5 s today); job state in ScyllaDB
 - [ ] S3 storage backend + CDN signed URLs + HLS/DASH ladder (local-directory storage today)
@@ -124,61 +128,116 @@ File plan: `services/studio/xen_studio/{router,pipeline,api}` (Python) · `infra
 - [ ] Human trust-and-safety queue and appeals; real-person and age rules
 - [ ] OpenAPI export for the studio service (FastAPI serves it at `/docs`); metrics and traces for the Python service
 
-## Phase 3 — Localization and publishing  (first slice built and verified)
-
-File plan: `infra/db/migrations/0005` · `services/studio` (packaging, export, notify activities; notifications API) ·
-`apps/web` (package panel, formats, notification bell).
+## Phase 3 — Localization and publishing  (built and verified on mocks, except platform upload)
 
 ### Done and verified
-- [x] Title / description / tags generation and a real thumbnail image with each render (mock LLM, FFmpeg frame + title)
-- [x] Multi-format export: 9:16 and 1:1 from the 16:9 render, background job, idempotent per render and format,
-      centre-crop reframing; verified 720×1280 output
-- [x] Subtitle export (SRT and VTT) — delivered in Phase 2
-- [x] Notifications at script-ready, video-ready, generation-failed and export-ready: in-app feed with unread state,
-      plus email and push through provider interfaces (mock adapters), delivery log per channel, no duplicates on retry
-- [x] UI: publish package with copy buttons and thumbnail download, format buttons, notification bell and drawer
-- [x] Covered by the pipeline end-to-end test and the browser visual suite
+- [x] Title / description / tags generation and a thumbnail image with each render
+- [x] Multi-format export: 9:16 and 1:1 (centre-crop), idempotent background jobs
+- [x] Subtitle export (SRT and VTT)
+- [x] Notifications: in-app feed, email and push through provider interfaces, delivery log, no duplicates
+- [x] **Localization**: glossary per language (case-insensitive upsert), translation through the LLM capability with
+      glossary terms enforced, **human review queue** with side-by-side line editing, approval reserves credits, dubbed
+      render reuses the original visuals and holds the last frame when dubbed speech runs longer, language-tagged
+      subtitle track, credits debited on success / refunded on failure, plan language limit — 2 end-to-end tests
+- [x] UI: languages panel on each video, review page, glossary manager, review queue on the studio page
 
-### Not built yet (in order)
-- [ ] Localization: per-language script adaptation with glossary, native-speaker review queue, multiple voices per language
-- [ ] Real email (SMTP/provider) and push (FCM/APNs) adapters; notification preferences; templates per locale
-- [ ] Publishing: connect channel (OAuth) and scheduled upload to YouTube, TikTok, Facebook, Instagram behind a
-      provider interface — needs developer apps and credentials for each platform
-- [ ] Subject-aware reframing for vertical formats; burned-in captions for Shorts
-- [ ] Phase 3 e2e covering localization and publishing
+### Not built (in order)
+- [ ] Scheduled upload to YouTube, TikTok, Facebook, Instagram — needs a developer app and OAuth credentials per platform
+- [ ] Real push (FCM / APNs); notification preferences; email templates per locale
+- [ ] Subject-aware reframing; burned-in captions option
+- [ ] Mock translation only tags lines (`[ur] …`); real translation needs an LLM key
 
-## Phase 4 — Big data layer and Admin dashboard
-- [ ] Events → Iceberg lakehouse; Flink live cost and fraud signals; Spark + dbt aggregates; ClickHouse
-- [ ] Airflow, data catalog, data quality checks, lineage
-- [ ] Admin UI: users, revenue, cost, queues, moderation queue
-- [ ] Phase 4 e2e
+## Phase 4 — Big data layer and Admin dashboard  (admin built and verified; big-data engines written, not run)
 
-## Phase 5 — Animation Studio
-- [ ] Link ingestion with rights-confirmation records and copyright detection
-- [ ] Style profiles, character consistency, avatars + lip-sync (consent records), music and SFX
-- [ ] Phase 5 e2e
+### Done and verified
+- [x] **Admin & Analytics API** (staff only; platform role re-checked in the database on every call, spoofed headers
+      rejected): users, plan revenue, credits granted / spent / reserved / refunded, video minutes, provider cost and
+      **cost per video minute**, daily series, per-provider jobs / failure rate / cost / latency, queues, moderation
+- [x] Moderation queue with uphold / overturn (audited); a decision on a **rights hold** resumes or stops the project
+- [x] User search and suspend / reactivate (sessions revoked, audited, staff cannot act on peers)
+- [x] **Admin UI**: KPI tiles, three daily bar charts (hover/focus tooltips, table view, contrast-validated), provider
+      table, queues, moderation queue, user table — rendered and checked in a browser
+- [x] **Outbox → event bus relay** (at-least-once, `SKIP LOCKED` for many relays, retried on sink failure); Kafka sink
+      written, JSON-lines lake sink tested; runs in the local stack
+- [x] `scripts/make-staff.mjs` to grant staff access
 
-## Phase 6 — Platform features
-- [ ] Teams UI, brand kits, templates, asset library, search (OpenSearch, Qdrant), real-time collaboration
-- [ ] Public API + webhooks + SDK; Stripe billing behind a provider interface, regional pricing; referrals
-- [ ] Support and internal admin tools; full translation coverage; accessibility audit; React Native app
-- [ ] Phase 6 e2e
+### Written, not run (no engines in the build sandbox)
+- [ ] ClickHouse schema with Kafka ingest and materialized views (`infra/analytics/clickhouse`)
+- [ ] Flink SQL live signals: provider cost spikes, credit burn, refund ratio, signup bursts (`infra/analytics/flink`)
+- [ ] Iceberg raw zone + dbt staging/marts incl. unit economics + data-quality tests (`infra/analytics/dbt`)
+- [ ] Airflow daily DAG with freshness, build, catalog/lineage (`infra/analytics/airflow`)
+- [ ] Kafka sink of the relay (needs a broker)
 
-## Phase 7 — XR
-- [ ] Shared 3D asset pipeline (glTF/USD); in-browser scene editor (Three.js / WebXR)
-- [ ] AR Studio, VR Studio, MR/XR Studio: spatial audio, multi-user sessions, cloud streaming, device exports (Unity + OpenXR)
-- [ ] Phase 7 e2e
+## Phase 5 — Animation Studio  (built and verified on mocks)
 
-## Phase 8 — Scale and hardening
+### Done and verified
+- [x] Start from your own text (adapted, never invented around) or a link to content you own
+- [x] **Rights record** stored before any link is processed (exact attestation text, user, IP); attestation required
+- [x] Copyright screen: catalog links held for **human rights review** in the Admin queue; staff decision resumes or blocks;
+      no credits reserved while held — tested end to end
+- [x] Style profiles (4 presets: flat, paper, watercolor, ink noir) applied to every scene
+- [x] Character sheets: named characters keep one seed and their description in every scene they appear in
+- [x] Music bed (calm / uplifting / tense) mixed under narration with sidechain ducking and loudness normalization
+- [x] **Consent records** for voice / face cloning; a cloned voice is refused without an unrevoked consent record
+- [x] Animation dashboard UI (text / link modes, style picker, characters, music) — driven end to end in a browser
+- [x] 3 end-to-end tests (styled render verified by frame colour and audio level; link + rights review; consent)
+
+### Not built
+- [ ] Avatars and lip-sync (needs an avatar model, e.g. HeyGen / D-ID / self-hosted); voice cloning itself (needs ElevenLabs voice cloning)
+- [ ] Copyright fingerprinting vendor (mock flags catalog hosts only); video and audio file uploads as sources
+- [ ] Real music / SFX model; custom style profiles UI (API supports workspace profiles)
+- [ ] Mock "animation" is moving shapes in the style palette; real animation needs an image or video model
+
+## Phase 6 — Platform features  (billing and teams built; the rest not started)
+
+### Done and verified
+- [x] **Billing**: Stripe behind a payment-provider interface (REST, no SDK) + a mock provider with a local checkout page;
+      plan changes only from a **signature-verified webhook** (Stripe scheme, 5-minute tolerance, tampering rejected),
+      exactly once per event; one credit grant per billing period; cancel downgrades to Starter — 4 tests
+- [x] **Regional pricing** (purchasing-power multipliers; regional Stripe prices `STRIPE_PRICE_PRO_PK` etc. when configured)
+- [x] **Team settings UI**: add members, change roles, remove (owner / admin rules enforced by the API), plan and upgrade
+- [x] Interface translations EN / AR / UR with RTL (key-parity test); keyboard navigation and contrast tested
+
+### Not built
+- [ ] Brand kits, templates, asset library, search (OpenSearch, Qdrant), real-time collaboration
+- [ ] Public API keys, webhooks and SDK; referral program; support tools; internal admin tools beyond Phase 4
+- [ ] React Native mobile app
+- [ ] Customer portal (invoices, payment method), proration, taxes; country verification for regional prices (see D-043)
+
+## Phase 7 — XR  (asset pipeline, editor and export built; XR sessions unverified on devices)
+
+### Done and verified
+- [x] **Shared 3D asset pipeline**: prompt → moderation → credits reserved → text-to-3D capability → **GLB validated**
+      → stored → debited (refunded on failure); queued, never synchronous. Mock builds real glTF 2.0 files from primitives
+- [x] Scenes for AR / VR / MR-XR with nodes, transforms, environment and **spatial-audio sources**; autosave with
+      **optimistic concurrency** (stale tab gets 409); assets from other tenants rejected
+- [x] **Device export**: whole scene merged into one GLB with transforms and audio metadata (validated), Studio plan only
+- [x] **In-browser scene editor** (three.js): library, add, select, move/rotate/scale gizmo, inspector, environment,
+      positional-audio preview, autosave, export; **Enter VR / View in AR** via WebXR when a device supports it
+- [x] AR, VR and MR/XR studio dashboards; plan gating (none / preview / full) — 2 API tests + browser run
+
+### Not built or not verified
+- [ ] WebXR sessions have **not** been tested on a headset or phone (no device here)
+- [ ] Multi-user sessions; cloud streaming; Unity + OpenXR / AR Foundation project; USD/USDZ export
+- [ ] Real text-to-3D quality (Meshy adapter written and tested against simulated responses only)
+
+## Phase 8 — Scale and hardening  (documents and scripts written; nothing run at scale)
+
+- [x] Capacity model `docs/capacity.md` for 1M / 10M / 100M / 1B concurrent users — **assumption-based**, every
+      constant marked and replaceable with k6 results
+- [x] Runbooks: deploy, rollback, incident, disaster recovery (with a ledger reconciliation query that returns zero
+      mismatches on all test data)
+- [ ] k6 scripts written (`infra/k6`), **not run**
 - [ ] Self-hosted model serving with GPU autoscaling; multi-region active-active; cell provisioning automation
-- [ ] k6 load tests per service; `/docs/capacity.md` for 1M / 10M / 100M / 1B concurrent users
-- [ ] Chaos tests, security review, compliance (export, deletion, consent, audit), enterprise (SSO, SCIM, white-label)
-- [ ] Status page, disaster-recovery drills, final documentation
+- [ ] Helm charts, Terraform modules, ArgoCD, service mesh policy
+- [ ] Chaos tests; security review; data export and deletion for compliance; enterprise SSO / SCIM / white-label; status page
+- [ ] Disaster-recovery drills
 
 ## What is mocked, untested, or needs a human
 | Item | State |
 |---|---|
-| AI providers | **All mocked.** Scripts come from templates, not a language model. English narration is a local robotic voice (FFmpeg flite); other languages get a placeholder tone. Visuals are title cards, not generated video. Real output quality needs provider keys |
+| AI providers | **Mocked until you add keys.** With no keys: template scripts, robotic local English voice, title-card / shape visuals, tagged (not translated) lines, primitive 3D models, synthesized music. Real adapters exist for OpenAI, Anthropic, ElevenLabs, Stability, Meshy, Resend and switch on automatically per key (`MODEL_ROUTER_MODE=auto`) |
+| Payments | Mock checkout until `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` + `STRIPE_PRICE_PRO` / `STRIPE_PRICE_STUDIO` are set |
 | Temporal | Workflow adapter written, never run (see Phase 2) |
 | Storage | Local directory behind a storage interface; S3/MinIO adapter not written |
 | CockroachDB / ScyllaDB / Kafka / Temporal / MinIO | Configured in compose; never started in the build sandbox |

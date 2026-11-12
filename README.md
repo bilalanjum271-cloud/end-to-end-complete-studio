@@ -3,7 +3,10 @@
 AI content-generation platform: Script-to-Video, Animation, AR, VR, MR/XR and Admin & Analytics in one workspace.
 Cell-based, multi-tenant, designed to scale horizontally.
 
-**Status:** Phase 1 (Foundation) core and the Phase 2 Script-to-Video flow are built and tested with mock AI providers. See [PROGRESS.md](PROGRESS.md) for exactly what is done,
+**Status:** all six dashboards work end to end with mock AI providers: Script-to-Video, Animation, AR / VR / MR-XR
+(3D assets, scene editor, export) and Admin & Analytics, plus localization, billing and teams. Add API keys to switch
+the AI to real providers. Big-data engines, Kubernetes/Terraform and anything needing devices or cloud are written or
+planned but **not run**; see [PROGRESS.md](PROGRESS.md) for exactly what is verified. See [PROGRESS.md](PROGRESS.md) for exactly what is done,
 what is written but unverified, and what remains. Choices are logged in [DECISIONS.md](DECISIONS.md).
 
 ## What runs today
@@ -16,7 +19,7 @@ what is written but unverified, and what remains. Choices are logged in [DECISIO
 | Credit ledger (reserve / debit / refund, append-only, exactly-once) | `services/ledger` | Go |
 | Cell router (workspace → cell) | `services/cell-router` | Go |
 | Identity (auth, workspaces, roles, plans) | `services/identity` | NestJS |
-| Studio (model router, Script-to-Video pipeline, project API) | `services/studio` | Python, FastAPI, Temporal, FFmpeg |
+| Studio (model router, video / animation / localization pipelines, XR assets, admin API, event relay) | `services/studio` | Python, FastAPI, Temporal, FFmpeg |
 
 ```
 browser → web (Next.js) → gateway ─┬→ identity ─→ SQL
@@ -43,6 +46,29 @@ node scripts/dev.mjs            # builds, migrates, seeds, starts every service 
 Open http://localhost:3000 and create an account. You land in Script-to-Video with 200 Starter credits (20 video minutes).
 Write a prompt, approve the script, watch it generate, review it. With no provider keys the AI is mocked: template
 scripts, a local robotic English voice and title-card visuals — the pipeline, credits and UI are real.
+
+## Turn on real AI (add keys later)
+
+Put any of these in `.env` and restart; each capability switches from mock to real automatically:
+
+| Key | Enables |
+|---|---|
+| `OPENAI_API_KEY` | scripts, research, translation, titles (LLM); moderation; voice; images for scenes |
+| `ANTHROPIC_API_KEY` | scripts etc. (second LLM, used for failover) |
+| `ELEVENLABS_API_KEY` | native-quality multilingual narration (preferred voice) |
+| `STABILITY_API_KEY` | scene images (second visual provider) |
+| `MESHY_API_KEY` | real text-to-3D assets for AR / VR / XR |
+| `RESEND_API_KEY` + `EMAIL_FROM` | real notification emails |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_PRO`, `STRIPE_PRICE_STUDIO` | real payments |
+| `INGEST_ALLOW_NETWORK=1` | the Animation Studio reads real web pages from links |
+
+`MODEL_ROUTER_MODE=mock` forces mocks (demos, CI); `live` refuses to fall back to mocks.
+
+## Admin access
+
+```bash
+DATABASE_URL=... node scripts/make-staff.mjs you@example.com   # then sign out and in; open Admin & Analytics
+```
 
 ## Test it
 

@@ -19,7 +19,7 @@ with workflow.unsafe.imports_passed_through():
 TASK_QUEUE = "script-to-video"
 _RETRY = RetryPolicy(initial_interval=timedelta(seconds=1), backoff_coefficient=2.0, maximum_attempts=3,
                      non_retryable_error_types=["ValueError", "LookupError"])
-_TIMEOUTS = {"generate_visual": 900, "generate_voice": 300, "assemble_render": 1800, "write_script": 300}
+_TIMEOUTS = {"ingest_source": 120, "generate_visual": 900, "generate_voice": 300, "assemble_render": 1800, "write_script": 300}
 
 
 class _TemporalHost:
@@ -65,6 +65,10 @@ class ScriptToVideoWorkflow:
     @workflow.signal
     def accept(self, data: dict) -> None:
         self._host.signals.append(("accept", data))
+
+    @workflow.signal
+    def rights_decision(self, data: dict) -> None:
+        self._host.signals.append(("rights_decision", data))
 
     @workflow.signal
     def cancel(self, data: dict) -> None:

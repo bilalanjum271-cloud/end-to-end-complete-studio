@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Coins, LogOut, Menu, Moon, Search } from 'lucide-react';
+import { Coins, LogOut, Menu, Moon, Search, Settings } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Button, CommandPalette, Drawer, Tooltip, type CommandItem } from '@xen-studio/ui';
@@ -78,6 +78,7 @@ export function Shell({ user, workspace, credits, theme, children }: ShellProps)
       shortcut: `G ${shortcut.toUpperCase()}`, keywords: [slug], onSelect: () => router.push(`/app/${slug}`),
     })),
     { id: 'credits', group: t('app.group.navigate'), label: t('app.go', { name: t('app.credits') }), icon: <Coins className="size-4" aria-hidden />, onSelect: () => router.push('/app/credits') },
+    { id: 'settings', group: t('app.group.navigate'), label: t('app.go', { name: t('settings.title') }), icon: <Settings className="size-4" aria-hidden />, onSelect: () => router.push('/app/settings') },
     { id: 'theme', group: t('app.group.prefs'), label: t('app.theme.toggle'), icon: <Moon className="size-4" aria-hidden />, onSelect: () => { toggleTheme(); router.refresh(); } },
     { id: 'logout', group: t('app.account'), label: t('app.logout'), icon: <LogOut className="size-4" aria-hidden />, onSelect: () => { void logout(); } },
   ], [t, router]);
@@ -94,6 +95,7 @@ export function Shell({ user, workspace, credits, theme, children }: ShellProps)
       <aside className="sticky top-0 hidden h-dvh w-64 shrink-0 flex-col gap-6 border-e border-line p-4 md:flex">
         <Link href="/app/video" aria-label="Xen Studio" className="px-2 py-1"><Logo /></Link>
         <nav aria-label={t('app.nav.label')} className="flex-1"><NavList /></nav>
+        <Link href="/app/settings" className="flex h-10 items-center gap-3 rounded-md px-3 text-base text-fg-muted hover:text-fg"><Settings className="size-4" aria-hidden />{t('settings.nav')}</Link>
         {workspaceCard}
       </aside>
 

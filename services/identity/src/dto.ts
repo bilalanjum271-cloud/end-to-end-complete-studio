@@ -38,3 +38,8 @@ export class AddMemberDto {
 export class UpdateMemberDto {
   @ApiProperty({ enum: ROLES }) @IsIn(ROLES as unknown as string[]) role!: Role;
 }
+
+export class CheckoutDto {
+  @ApiProperty({ enum: ['pro', 'studio'] }) @IsIn(['pro', 'studio']) plan_id!: string;
+  @ApiPropertyOptional() @IsOptional() @Matches(/^[A-Za-z]{2}$/) country?: string;
+}

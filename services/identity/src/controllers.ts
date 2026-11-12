@@ -3,9 +3,10 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { Pool } from 'pg';
 import { POOL } from './db';
-import { AddMemberDto, CreateWorkspaceDto, LoginDto, RefreshDto, SignupDto, UpdateMemberDto } from './dto';
+import { AddMemberDto, CheckoutDto, CreateWorkspaceDto, LoginDto, RefreshDto, SignupDto, UpdateMemberDto } from './dto';
 import { Actor, CurrentActor, MinRole, Public } from './guards';
 import { IdentityService } from './identity.service';
+import { BillingService, regionalCents } from './billing';
 
 const meta = (req: Request) => ({ ip: (req.header('x-forwarded-for') ?? '').split(',').pop()?.trim() || req.ip, ua: req.header('user-agent') });
 
@@ -41,7 +42,12 @@ export class AuthController {
 @Controller('v1/plans')
 export class PlansController {
   constructor(private readonly svc: IdentityService) {}
-  @Public() @Get() async list() { return { plans: await this.svc.plans() }; }
+  @Public() @Get() async list(@Req() req: Request) {
+    // The edge sets X-Country from the client IP; ?country= lets the pricing page preview a region.
+    const country = String(req.query.country ?? req.header('x-country') ?? '').slice(0, 2).toUpperCase();
+    const plans = await this.svc.plans();
+    return { country: country || null, plans: plans.map((p) => ({ ...p, regional_price_cents: country ? regionalCents(p.monthly_price_cents, country) : p.monthly_price_cents })) };
+  }
 }
 
 @ApiTags('workspaces') @ApiBearerAuth()
@@ -73,5 +79,25 @@ export class WorkspacesController {
   @MinRole('admin') @Delete('workspaces/:workspaceId/members/:userId') @HttpCode(204)
   async remove(@CurrentActor() actor: Actor, @Param('userId', ParseUUIDPipe) userId: string, @Req() req: Request) {
     await this.svc.removeMember(actor, userId, meta(req).ip);
+  }
+}
+
+@ApiTags('billing') @ApiBearerAuth()
+@Controller('v1/billing')
+export class BillingController {
+  constructor(private readonly billing: BillingService, @Inject(POOL) private readonly pool: Pool) {}
+
+  @MinRole('viewer') @Get('summary')
+  summary(@CurrentActor() actor: Actor) { return this.billing.summary(actor); }
+
+  @MinRole('owner') @Post('checkout') @HttpCode(200) @ApiOperation({ summary: 'Start a checkout for a paid plan (owners only)' })
+  async checkout(@CurrentActor() actor: Actor, @Body() dto: CheckoutDto, @Req() req: Request) {
+    const u = await this.pool.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [actor.userId]);
+    return this.billing.checkout(actor, dto.plan_id, u.rows[0]?.email ?? '', (req.header('x-country') ?? dto.country ?? '').slice(0, 2));
+  }
+
+  @Public() @Post('webhook') @HttpCode(200) @ApiOperation({ summary: 'Payment-provider webhook (signature verified)' })
+  webhook(@Req() req: Request & { rawBody?: Buffer }) {
+    return this.billing.handleWebhook(req.rawBody?.toString('utf8') ?? '', req.header('stripe-signature') ?? '');
   }
 }

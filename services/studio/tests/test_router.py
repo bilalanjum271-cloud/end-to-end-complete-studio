@@ -62,7 +62,7 @@ def test_language_routing_skips_providers_that_do_not_support_the_language():
 
 def test_every_capability_has_at_least_two_adapters():
     cat = default_router().catalog()
-    assert set(cat) == {"moderation", "llm", "tts", "visual", "qc", "email", "push"}
+    assert set(cat) == {"moderation", "llm", "tts", "visual", "qc", "email", "push", "music", "rights", "ingest", "3d"}
     assert all(len(v) >= 2 for v in cat.values())
 
 
