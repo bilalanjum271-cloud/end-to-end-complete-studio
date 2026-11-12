@@ -39,3 +39,17 @@ export const regenerateScript = async (id: string, feedback: string) => post(id,
 export const cancelProject = async (id: string) => post(id, 'cancel', {});
 export const acceptVideo = async (id: string) => post(id, 'review', { action: 'accept' });
 export const reviseScenes = async (id: string, positions: number[], feedback: string) => post(id, 'review', { action: 'revise', scene_positions: positions, feedback });
+
+export async function requestExport(id: string, version: number, format: '9:16' | '1:1'): Promise<{ ok: boolean }> {
+  if (!/^[0-9a-f-]{36}$/.test(id) || !Number.isInteger(version)) return { ok: false };
+  try {
+    await gw(`/v1/projects/${id}/renders/${version}/exports`, { method: 'POST', token: await accessToken(), body: { format } });
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function markNotificationsRead(): Promise<void> {
+  await gw('/v1/notifications/read', { method: 'POST', token: await accessToken(), body: {} }).catch(() => undefined);
+}

@@ -10,6 +10,7 @@ import json
 import math
 import os
 import tempfile
+import textwrap
 import time
 import uuid
 from contextlib import contextmanager
@@ -338,6 +339,97 @@ def assemble_render(ws: str, pid: str) -> int:
     return rv
 
 
+# ── 13. packaging: titles, description, tags, thumbnail ────────────────────────
+def package_render(ws: str, pid: str) -> bool:
+    """Publish-ready packaging for the newest render. Best effort: a packaging failure never fails the video."""
+    d = deps()
+    try:
+        with d.db() as conn:
+            p = _project(conn, ws, pid)
+            rv = p["render_version"]
+            render = conn.execute("SELECT storage_key FROM renders WHERE workspace_id=%s AND project_id=%s AND version=%s", (ws, pid, rv)).fetchone()
+            first = conn.execute("SELECT narration FROM scenes WHERE workspace_id=%s AND project_id=%s AND script_version=%s ORDER BY position LIMIT 1",
+                                 (ws, pid, p["script_version"])).fetchone()
+            pkg, used = d.router.call("llm", "package", language=p["language"], title=p["title"], narration=first["narration"])
+            thumb_key = None
+            with tempfile.TemporaryDirectory() as tmp:
+                out = os.path.join(tmp, "thumb.jpg")
+                titlefile = os.path.join(tmp, "title.txt")
+                with open(titlefile, "w") as f:
+                    f.write("\n".join(textwrap.wrap(pkg["titles"][0], 22)[:3]))
+                media.run(["ffmpeg", "-y", "-ss", "1", "-i", str(d.storage.path(render["storage_key"])), "-frames:v", "1",
+                           "-vf", f"drawbox=x=0:y=0:w=iw:h=ih:color=black@0.45:t=fill,drawtext=textfile={titlefile}:fontcolor=white:fontsize=h/8:line_spacing=18:x=64:y=(h-text_h)/2",
+                           "-q:v", "3", out])
+                thumb_key = d.storage.put_file(f"{ws}/{pid}/renders/v{rv}/thumbnail.jpg", out)
+            conn.execute("""INSERT INTO publish_packages (workspace_id,project_id,render_version,titles,description,tags,thumbnail_key,provider)
+                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                            ON CONFLICT (workspace_id,project_id,render_version) DO UPDATE SET titles=excluded.titles, description=excluded.description,
+                              tags=excluded.tags, thumbnail_key=excluded.thumbnail_key, provider=excluded.provider, updated_at=now()""",
+                         (ws, pid, rv, json.dumps(pkg["titles"]), pkg["description"], json.dumps(pkg["tags"]), thumb_key, used.provider))
+            _job(conn, ws, pid, "packaging", used, key=f"package-v{rv}")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# ── multi-format export (9:16 for Shorts / Reels / TikTok, 1:1 for feeds) ──────
+EXPORT_SIZES = {"9:16": (720, 1280), "1:1": (720, 720)}
+
+
+def export_render(ws: str, pid: str, version: int, fmt: str) -> None:
+    d = deps()
+    w, h = EXPORT_SIZES[fmt]
+    with d.db() as conn:
+        render = conn.execute("SELECT storage_key FROM renders WHERE workspace_id=%s AND project_id=%s AND version=%s", (ws, pid, version)).fetchone()
+        conn.execute("UPDATE exports SET status='running', updated_at=now() WHERE workspace_id=%s AND project_id=%s AND render_version=%s AND format=%s", (ws, pid, version, fmt))
+        conn.commit()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out = os.path.join(tmp, "export.mp4")
+                # Automatic reframing: centre crop to the target aspect, then scale. (Subject-aware reframing arrives with real video models.)
+                media.run(["ffmpeg", "-y", "-i", str(d.storage.path(render["storage_key"])), "-map", "0:v:0", "-map", "0:a:0", "-map", "0:s?",
+                           "-vf", f"crop=ih*{w}/{h}:ih,scale={w}:{h},setsar=1", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+                           "-c:a", "copy", "-c:s", "copy", "-movflags", "+faststart", out])
+                key = d.storage.put_file(f"{ws}/{pid}/renders/v{version}/export-{fmt.replace(':', 'x')}.mp4", out)
+        except Exception as err:  # noqa: BLE001
+            conn.execute("UPDATE exports SET status='failed', error=%s, updated_at=now() WHERE workspace_id=%s AND project_id=%s AND render_version=%s AND format=%s",
+                         (str(err)[:300], ws, pid, version, fmt))
+            return
+        conn.execute("UPDATE exports SET status='succeeded', storage_key=%s, error=NULL, updated_at=now() WHERE workspace_id=%s AND project_id=%s AND render_version=%s AND format=%s",
+                     (key, ws, pid, version, fmt))
+        _emit(conn, ws, "project.events", "export.completed", {"project_id": pid, "version": version, "format": fmt})
+    notify(ws, pid, "export_ready")
+
+
+# ── 14. notify: in-app feed, email, push ───────────────────────────────────────
+NOTIFY_TITLES = {"script_ready": "Your script is ready to approve", "video_ready": "Your video is ready to review",
+                 "generation_failed": "A video could not be generated. Your credits were returned.", "export_ready": "Your export is ready to download"}
+
+
+def notify(ws: str, pid: str, kind: str) -> None:
+    """One notification per (project, kind, version); a retried activity does not notify twice."""
+    d = deps()
+    with d.db() as conn:
+        p = _project(conn, ws, pid)
+        user = conn.execute("SELECT email FROM users WHERE id=%s", (p["created_by"],)).fetchone()
+        nid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"xen-notify:{pid}:{kind}:{p['script_version']}:{p['render_version']}"))
+        title = f"{NOTIFY_TITLES[kind]}: {p['title']}"[:200]
+        inserted = conn.execute("""INSERT INTO notifications (workspace_id,id,user_id,kind,project_id,title,link) VALUES (%s,%s,%s,%s,%s,%s,%s)
+                                   ON CONFLICT (workspace_id,id) DO NOTHING RETURNING id""", (ws, nid, p["created_by"], kind, pid, title, f"/app/video/{pid}")).fetchone()
+        if not inserted:
+            return
+        deliveries = [("in_app", "database", "sent", None)]
+        for channel in ("email", "push"):
+            try:
+                _, used = d.router.call(channel, "send", to=user["email"] if user else "", subject=title, body=title)
+                deliveries.append((channel, used.provider, "sent", None))
+            except Exception as err:  # noqa: BLE001 - a failed channel is logged, never fatal
+                deliveries.append((channel, "none", "failed", str(err)[:300]))
+        for channel, provider, status, error in deliveries:
+            conn.execute("INSERT INTO notification_deliveries (workspace_id,notification_id,channel,provider,status,error) VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
+                         (ws, nid, channel, provider, status, error))
+
+
 def finish(ws: str, pid: str, status: str, error: str | None = None) -> None:
     d = deps()
     with d.db() as conn:
@@ -345,4 +437,4 @@ def finish(ws: str, pid: str, status: str, error: str | None = None) -> None:
 
 
 ALL = [moderate_prompt, reserve_credits, settle_credits, write_script, approve_script, prepare_regeneration,
-       generate_voice, generate_visual, assemble_render, finish]
+       generate_voice, generate_visual, assemble_render, package_render, export_render, notify, finish]

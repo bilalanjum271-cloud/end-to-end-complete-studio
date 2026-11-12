@@ -14,7 +14,7 @@ from temporalio.worker import Worker
 from .. import config
 from ..router import default_router
 from . import activities
-from .temporal_workflow import TASK_QUEUE, ScriptToVideoWorkflow
+from .temporal_workflow import TASK_QUEUE, RunActivityWorkflow, ScriptToVideoWorkflow
 
 
 async def main() -> None:
@@ -23,7 +23,7 @@ async def main() -> None:
     client = await Client.connect(cfg.temporal_address)
     acts = [activity.defn(name=f.__name__)(f) for f in activities.ALL]
     with ThreadPoolExecutor(max_workers=16) as pool:
-        await Worker(client, task_queue=TASK_QUEUE, workflows=[ScriptToVideoWorkflow], activities=acts,
+        await Worker(client, task_queue=TASK_QUEUE, workflows=[ScriptToVideoWorkflow, RunActivityWorkflow], activities=acts,
                      activity_executor=pool, max_concurrent_activities=16).run()
 
 

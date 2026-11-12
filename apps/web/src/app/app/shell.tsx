@@ -10,6 +10,7 @@ import { Logo } from '@/components/logo';
 import { ThemeToggle, toggleTheme } from '@/components/prefs';
 import { STUDIOS } from '@/lib/studios';
 import { logout } from '../(auth)/actions';
+import { NotificationBell } from './notifications';
 
 export interface ShellProps {
   user: { name: string; email: string };
@@ -118,6 +119,7 @@ export function Shell({ user, workspace, credits, theme, children }: ShellProps)
                 </Link>
               </Button>
             </Tooltip>
+            <NotificationBell />
             <ThemeToggle initial={theme} />
             <Tooltip content={`${user.name} · ${t('app.logout')}`}>
               <form action={logout}>

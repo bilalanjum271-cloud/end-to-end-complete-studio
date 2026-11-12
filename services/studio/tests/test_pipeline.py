@@ -142,6 +142,42 @@ async def test_prompt_to_reviewed_video_with_revision_limit_and_exact_credit_acc
         prov = (await c.get(f"/v1/projects/{pid}/renders/1/provenance", headers=h)).json()
         assert prov["ai_generated"] is True and prov["watermarked"] is True and len(prov["asset"]["sha256"]) == 64
 
+        # publish package: titles, description, tags and a real JPEG thumbnail
+        p = (await c.get(f"/v1/projects/{pid}", headers=h)).json()
+        assert len(p["package"]["titles"]) == 3 and "tunguska" in p["package"]["tags"] and "AI-generated" in p["package"]["description"]
+        thumb = await c.get(f"/v1/projects/{pid}/renders/1/thumbnail", headers=h)
+        assert thumb.status_code == 200 and thumb.content[:3] == b"\xff\xd8\xff"
+
+        # notifications: script-ready and video-ready reached the creator through all three channels, once each
+        feed = (await c.get("/v1/notifications", headers=h)).json()
+        assert feed["unread"] == 2 and [n["kind"] for n in feed["notifications"]] == ["video_ready", "script_ready"]
+        with psycopg.connect(DB) as conn:
+            sent = conn.execute("SELECT channel, count(*) FROM notification_deliveries WHERE workspace_id=%s AND status='sent' GROUP BY channel ORDER BY channel", (h["X-Workspace-Id"],)).fetchall()
+        assert sent == [("email", 2), ("in_app", 2), ("push", 2)]
+        await c.post("/v1/notifications/read", headers=h, json={"ids": [feed["notifications"][0]["id"]]})
+        assert (await c.get("/v1/notifications", headers=h)).json()["unread"] == 1
+        await c.post("/v1/notifications/read", headers=h, json={})
+        assert (await c.get("/v1/notifications", headers=h)).json()["unread"] == 0
+
+        # multi-format export: 9:16 is rendered in the background, once, at 720x1280
+        e1 = await c.post(f"/v1/projects/{pid}/renders/1/exports", headers=h, json={"format": "9:16"})
+        e2 = await c.post(f"/v1/projects/{pid}/renders/1/exports", headers=h, json={"format": "9:16"})
+        assert e1.status_code == 202 and e1.json()["status"] == "queued" and e2.json()["status"] == "exists"
+        assert (await c.post(f"/v1/projects/{pid}/renders/1/exports", headers=h, json={"format": "4:3"})).status_code == 422
+        for _ in range(150):
+            ex = (await c.get(f"/v1/projects/{pid}", headers=h)).json()["exports"]
+            if ex and ex[0]["status"] in ("succeeded", "failed"):
+                break
+            await asyncio.sleep(0.2)
+        assert ex == [{"format": "9:16", "status": "succeeded", "error": None}]
+        with psycopg.connect(DB) as conn:
+            ekey = conn.execute("SELECT storage_key FROM exports WHERE project_id=%s AND format='9:16'", (pid,)).fetchone()[0]
+        dims = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0",
+                               str(activities.deps().storage.path(ekey))], capture_output=True, text=True).stdout.strip()
+        assert dims == "720,1280"
+        assert (await c.get(f"/v1/projects/{pid}/renders/1/exports/9x16/video", headers=h)).status_code == 200
+        assert (await c.get(f"/v1/projects/{pid}/renders/1/exports/1x1/video", headers=h)).status_code == 404
+
         # revision round 1: only scene 2 is regenerated
         r = await c.post(f"/v1/projects/{pid}/review", headers=h, json={"action": "revise", "scene_positions": [2], "feedback": "simpler wording"})
         assert r.status_code == 200
@@ -175,6 +211,8 @@ async def test_prompt_to_reviewed_video_with_revision_limit_and_exact_credit_acc
         assert (await c.get(f"/v1/projects/{pid}", headers=other)).status_code == 404
         assert (await c.get(f"/v1/projects/{pid}/renders/1/video", headers=other)).status_code == 404
         assert (await c.get("/v1/projects", headers=other)).json()["projects"] == []
+        assert (await c.get("/v1/notifications", headers=other)).json() == {"unread": 0, "notifications": []}
+        assert (await c.get(f"/v1/projects/{pid}/renders/1/thumbnail", headers=other)).status_code == 404
 
 
 async def test_blocked_prompt_spends_nothing(app):
@@ -197,6 +235,7 @@ async def test_generation_failure_refunds_the_reservation(app, monkeypatch):
         await c.post(f"/v1/projects/{pid}/script/approve", headers=h, json={})
         p = await until(c, h, pid, {"failed"})
         assert "visual.render failed on every provider" in p["error"]
+        assert [n["kind"] for n in (await c.get("/v1/notifications", headers=h)).json()["notifications"]][0] == "generation_failed"
     assert balance(app.state.ledger_url, h) == (200, 0, 0)
 
 

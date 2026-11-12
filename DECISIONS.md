@@ -36,3 +36,8 @@ Choices made where the source document was silent or unavailable. Each can be re
 | D-030 | Revision rounds regenerate scenes at no extra charge inside the original reservation | Simple and predictable for the first release | Revisit with measured cost per regeneration |
 | D-031 | Live progress uses 1.5 s polling through the web tier | No Kafka/WebSocket path could be run in the sandbox | Replace with WebSocket push (Phase 2 remaining) |
 | D-032 | Provenance: an unsigned C2PA-shaped manifest plus MP4 metadata and a visible watermark on Starter | Signing needs a certificate and the c2pa toolchain | When a signing certificate is available |
+| D-033 | Exports run as a single retried background activity (`RunActivity` workflow on Temporal; a task on the in-process host) | An export is one FFmpeg step; a full workflow adds nothing | — |
+| D-034 | Vertical and square exports use centre-crop reframing | Works for any source without a vision model | Subject-aware reframing when real video models are connected |
+| D-035 | Notifications are keyed by (project, kind, script version, render version) | A retried activity or a re-delivered event must not notify twice | — |
+| D-036 | The notification bell polls every 20 s while the tab is visible | Same reason as D-031 | WebSocket push |
+| D-037 | Email and push are capabilities in the model router (`email`, `push`) | Reuses failover, breaker and health reporting for vendors that fail the same way AI vendors do | Split into the Notification service when templates and preferences land |

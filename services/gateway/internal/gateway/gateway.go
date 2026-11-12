@@ -67,6 +67,7 @@ func DefaultRoutes() []Route {
 		{Prefix: "/v1/workspaces", Upstream: "identity"},
 		{Prefix: "/v1/credits", Upstream: "ledger"},
 		{Prefix: "/v1/projects", Upstream: "studio"},
+		{Prefix: "/v1/notifications", Upstream: "studio"},
 	}
 }
 

@@ -55,6 +55,14 @@ class Regenerate(BaseModel):
     feedback: str = Field(default="", max_length=2000)
 
 
+class ExportRequest(BaseModel):
+    format: Literal["9:16", "1:1"]
+
+
+class MarkRead(BaseModel):
+    ids: list[str] = Field(default_factory=list, max_length=200)  # empty = mark everything read
+
+
 class Review(BaseModel):
     action: Literal["accept", "revise"]
     scene_positions: list[int] = Field(default_factory=list, max_length=100)
@@ -199,6 +207,10 @@ def create_app() -> FastAPI:
             renders = conn.execute("SELECT version, duration_ms, qc_score, created_at FROM renders WHERE workspace_id=%s AND project_id=%s ORDER BY version DESC", (ws, pid)).fetchall()
             revisions = conn.execute("SELECT round_number, feedback, scene_ids, created_at FROM revisions WHERE workspace_id=%s AND project_id=%s ORDER BY round_number", (ws, pid)).fetchall()
             cost = conn.execute("SELECT COALESCE(sum(cost_microusd),0) AS c FROM jobs WHERE workspace_id=%s AND project_id=%s", (ws, pid)).fetchone()["c"]
+            package = conn.execute("SELECT titles, description, tags, thumbnail_key IS NOT NULL AS has_thumbnail FROM publish_packages WHERE workspace_id=%s AND project_id=%s AND render_version=%s",
+                                   (ws, pid, p["render_version"])).fetchone()
+            exports = conn.execute("SELECT format, status, error FROM exports WHERE workspace_id=%s AND project_id=%s AND render_version=%s ORDER BY format",
+                                   (ws, pid, p["render_version"])).fetchall()
         steps = len(scenes) * 2
         done = sum((s["voice_status"] == "succeeded") + (s["visual_status"] == "succeeded") for s in scenes)
         remaining = steps - done
@@ -207,7 +219,7 @@ def create_app() -> FastAPI:
                 "revisions": [{**r, "created_at": str(r["created_at"])} for r in revisions],
                 "progress": {"percent": round(done / steps * 100) if steps else 0, "steps_done": done, "steps_total": steps,
                              "estimated_seconds_left": remaining * 2 if p["status"] == "generating" else 0, "provider_cost_microusd": int(cost)},
-                "revisions_left": p["max_revisions"] - p["revision_round"]}
+                "revisions_left": p["max_revisions"] - p["revision_round"], "package": package, "exports": exports}
 
     async def signal(request: Request, a: Actor, pid: str, expect: str, name: str, data: dict):
         with deps.db() as conn:
@@ -265,5 +277,58 @@ def create_app() -> FastAPI:
     @app.get("/v1/projects/{pid}/renders/{version}/provenance")
     def provenance(pid: str, version: int, a: Actor = Depends(actor)):
         return FileResponse(deps.storage.path(render_row(a, pid, version)["provenance_key"]), media_type="application/json")
+
+    @app.get("/v1/projects/{pid}/renders/{version}/thumbnail")
+    def thumbnail(pid: str, version: int, a: Actor = Depends(actor)):
+        render_row(a, pid, version)
+        with deps.db() as conn:
+            row = conn.execute("SELECT thumbnail_key FROM publish_packages WHERE workspace_id=%s AND project_id=%s AND render_version=%s", (a.workspace_id, pid, version)).fetchone()
+        if not row or not row["thumbnail_key"]:
+            raise HTTPException(404, "thumbnail not found")
+        return FileResponse(deps.storage.path(row["thumbnail_key"]), media_type="image/jpeg")
+
+    @app.post("/v1/projects/{pid}/renders/{version}/exports", status_code=202)
+    async def create_export(pid: str, version: int, body: ExportRequest, request: Request, a: Actor = Depends(editor)):
+        render_row(a, pid, version)
+        with deps.db() as conn:  # the primary key makes this idempotent: one export per render and format
+            created = conn.execute("""INSERT INTO exports (workspace_id,project_id,render_version,format,status,requested_by) VALUES (%s,%s,%s,%s,'queued',%s)
+                                      ON CONFLICT (workspace_id,project_id,render_version,format) DO UPDATE SET status='queued', error=NULL, updated_at=now()
+                                        WHERE exports.status='failed' RETURNING format""", (a.workspace_id, pid, version, body.format, a.user_id)).fetchone()
+        if created:
+            await request.app.state.orch.run_task("export_render", a.workspace_id, pid, version, body.format)
+        return {"format": body.format, "status": "queued" if created else "exists"}
+
+    @app.get("/v1/projects/{pid}/renders/{version}/exports/{fmt}/video")
+    def export_video(pid: str, version: int, fmt: Literal["9x16", "1x1"], a: Actor = Depends(actor)):
+        render_row(a, pid, version)
+        with deps.db() as conn:
+            row = conn.execute("SELECT storage_key FROM exports WHERE workspace_id=%s AND project_id=%s AND render_version=%s AND format=%s AND status='succeeded'",
+                               (a.workspace_id, pid, version, fmt.replace("x", ":"))).fetchone()
+        if not row:
+            raise HTTPException(404, "export not ready")
+        return FileResponse(deps.storage.path(row["storage_key"]), media_type="video/mp4", filename=f"xen-studio-{pid[:8]}-v{version}-{fmt}.mp4")
+
+    # ── notifications (in-app feed; scoped to the caller inside the current workspace) ──
+    @app.get("/v1/notifications")
+    def notifications(a: Actor = Depends(actor), limit: int = 30):
+        with deps.db() as conn:
+            rows = conn.execute("SELECT id, kind, project_id, title, link, read_at, created_at FROM notifications WHERE workspace_id=%s AND user_id=%s ORDER BY created_at DESC LIMIT %s",
+                                (a.workspace_id, a.user_id, max(1, min(limit, 100)))).fetchall()
+            unread = conn.execute("SELECT count(*) AS n FROM notifications WHERE workspace_id=%s AND user_id=%s AND read_at IS NULL", (a.workspace_id, a.user_id)).fetchone()["n"]
+        return {"unread": unread, "notifications": [{**r, "id": str(r["id"]), "project_id": str(r["project_id"]) if r["project_id"] else None,
+                                                      "read": r["read_at"] is not None, "read_at": None, "created_at": str(r["created_at"])} for r in rows]}
+
+    @app.post("/v1/notifications/read")
+    def mark_read(body: MarkRead, a: Actor = Depends(actor)):
+        with deps.db() as conn:
+            if body.ids:
+                try:
+                    ids = [str(uuid.UUID(i)) for i in body.ids]
+                except ValueError:
+                    raise HTTPException(400, "ids must be UUIDs") from None
+                conn.execute("UPDATE notifications SET read_at=now(), updated_at=now() WHERE workspace_id=%s AND user_id=%s AND read_at IS NULL AND id = ANY(%s::uuid[])", (a.workspace_id, a.user_id, ids))
+            else:
+                conn.execute("UPDATE notifications SET read_at=now(), updated_at=now() WHERE workspace_id=%s AND user_id=%s AND read_at IS NULL", (a.workspace_id, a.user_id))
+        return {"ok": True}
 
     return app

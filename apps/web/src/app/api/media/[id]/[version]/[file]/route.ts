@@ -1,6 +1,7 @@
 import { GATEWAY, accessToken } from '@/lib/server';
 
-const FILES: Record<string, string> = { 'video.mp4': 'video', 'download.mp4': 'video?download=1', 'subtitles.srt': 'subtitles.srt', 'subtitles.vtt': 'subtitles.vtt', 'provenance.json': 'provenance' };
+const FILES: Record<string, string> = { 'video.mp4': 'video', 'download.mp4': 'video?download=1', 'subtitles.srt': 'subtitles.srt', 'subtitles.vtt': 'subtitles.vtt', 'provenance.json': 'provenance',
+  'thumbnail.jpg': 'thumbnail', 'export-9x16.mp4': 'exports/9x16/video', 'export-1x1.mp4': 'exports/1x1/video' };
 
 // Streams a render from the cell to the browser using the session cookie, forwarding Range so the player can seek.
 // In production, renders are served from the CDN with signed URLs; this route is the local/dev path.

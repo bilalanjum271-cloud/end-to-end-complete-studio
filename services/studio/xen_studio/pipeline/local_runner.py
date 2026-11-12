@@ -47,6 +47,7 @@ class LocalOrchestrator:
     def __init__(self) -> None:
         self._hosts: dict[str, LocalHost] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        self._bg: set[asyncio.Task] = set()
 
     async def start(self, ws: str, pid: str) -> None:
         if pid in self._tasks:
@@ -63,6 +64,12 @@ class LocalOrchestrator:
             return False
         await host.signals.put((name, data))
         return True
+
+    async def run_task(self, name: str, *args) -> None:
+        """Runs one activity in the background (exports). Temporal runs the same activity in a one-step workflow."""
+        task = asyncio.create_task(LocalHost().act(name, *args))
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
 
     async def wait(self, pid: str, timeout: float = 120) -> str | None:
         task = self._tasks.get(pid)

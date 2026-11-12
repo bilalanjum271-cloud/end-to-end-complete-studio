@@ -98,7 +98,18 @@ def _llm(provider: str):
         lead = "Put simply," if "simpl" in feedback.lower() else "Look again:"
         return {"narration": f"{lead} {narration[0].lower()}{narration[1:]}"}, 600
 
-    return {"research": research, "write_script": write_script, "rewrite_scene": rewrite_scene}
+    def package(title: str, narration: str, language: str):
+        _maybe_fail("llm", provider)
+        topic = title.rstrip(".")
+        words = [w.strip(".,?!").lower() for w in topic.split() if len(w.strip(".,?!")) > 3]
+        tags = list(dict.fromkeys(words + ["documentary", "explained", "history"]))[:10]
+        low = topic[0].lower() + topic[1:]
+        first = re.split(r"(?<=[.?!])\s", narration.strip())[0]
+        return {"titles": [f"The Truth About {low}", f"{topic}: What Really Happened", f"Why {low} Still Matters"],
+                "description": f"{first} A short, clear look at {low}.\n\nMade with Xen Studio. This video contains AI-generated content.",
+                "tags": tags}, 500
+
+    return {"research": research, "write_script": write_script, "rewrite_scene": rewrite_scene, "package": package}
 
 
 def _has_flite() -> bool:
@@ -167,6 +178,13 @@ def _qc(provider: str):
     return score
 
 
+def _notify(provider: str, channel: str):
+    def send(to: str, subject: str, body: str):
+        _maybe_fail(channel, provider)
+        return {"accepted": True, "to": to}, 10  # a real adapter calls the email / push vendor here
+    return send
+
+
 def default_router() -> ModelRouter:
     r = ModelRouter()
     for name in ("mock-primary", "mock-secondary"):
@@ -175,4 +193,6 @@ def default_router() -> ModelRouter:
         r.register(Adapter(name, "tts", "mock-flite-1", {"speak": _tts(name)}))
         r.register(Adapter(name, "visual", "mock-titlecard-1", {"render": _visual(name)}))
         r.register(Adapter(name, "qc", "mock-probe-1", {"score": _qc(name)}))
+        r.register(Adapter(name, "email", "mock-smtp-1", {"send": _notify(name, "email")}))
+        r.register(Adapter(name, "push", "mock-push-1", {"send": _notify(name, "push")}))
     return r

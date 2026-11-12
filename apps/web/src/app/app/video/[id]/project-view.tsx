@@ -1,14 +1,35 @@
 'use client';
-import { Ban, Check, CircleAlert, Coins, Download, FileText, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react';
+import { Ban, Check, CircleAlert, Coins, Copy, Crop, Download, FileText, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, useTransition, type ReactNode } from 'react';
 import { Button, EmptyState, Input, Progress, Skeleton, StatusBadge, useToast } from '@xen-studio/ui';
 import { useI18n } from '@/components/i18n-provider';
 import { ACTIVE, badgeFor, type Project, type StepStatus } from '@/lib/projects';
-import { acceptVideo, approveScript, cancelProject, regenerateScript, reviseScenes } from '../actions';
+import { acceptVideo, approveScript, cancelProject, regenerateScript, requestExport, reviseScenes } from '../actions';
 
 const stepBadge: Record<StepStatus, 'queued' | 'running' | 'succeeded' | 'failed'> = { queued: 'queued', running: 'running', succeeded: 'succeeded', failed: 'failed' };
+
+function Copyable({ label, items }: { label: string; items: string[] }) {
+  const { t } = useI18n();
+  const toast = useToast();
+  return (
+    <div className="flex flex-col gap-2">
+      <h3 className="text-sm font-medium text-fg-muted">{label}</h3>
+      <ul className="flex flex-col gap-1">
+        {items.map((text) => (
+          <li key={text} className="flex items-start gap-2 rounded-md bg-surface-2 p-2 ps-3">
+            <p className="min-w-0 flex-1 py-1 text-base whitespace-pre-line text-fg" dir="auto">{text}</p>
+            <Button variant="ghost" size="icon" aria-label={`${t('package.copy')}: ${text.slice(0, 40)}`}
+              onClick={() => navigator.clipboard.writeText(text).then(() => toast({ title: t('package.copied'), tone: 'success' }), () => toast({ title: t('project.action.error'), tone: 'error' }))}>
+              <Copy className="size-4" aria-hidden />
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 export function ProjectView({ initial }: { initial: Project }) {
   const { t } = useI18n();
@@ -22,7 +43,8 @@ export function ProjectView({ initial }: { initial: Project }) {
   const [expect, setExpect] = useState<string | null>(null); // optimistic: keep polling until the status moves on
   const [busy, start] = useTransition();
 
-  const live = ACTIVE.includes(p.status) || expect !== null;
+  const exporting = p.exports?.some((e) => e.status === 'queued' || e.status === 'running') ?? false;
+  const live = ACTIVE.includes(p.status) || expect !== null || exporting;
   useEffect(() => {
     if (!live) return;
     let stop = false;
@@ -33,7 +55,8 @@ export function ProjectView({ initial }: { initial: Project }) {
         if (res.ok && !stop) {
           const next = (await res.json()) as Project;
           setP(next);
-          if (expect && (next.status !== expect || next.render_version !== p.render_version || next.script_version !== p.script_version)) setExpect(null);
+          if (expect === 'export') { if (next.exports.length) setExpect(null); }
+          else if (expect && (next.status !== expect || next.render_version !== p.render_version || next.script_version !== p.script_version)) setExpect(null);
         }
       } catch { /* transient: next tick retries */ }
     };
@@ -50,7 +73,7 @@ export function ProjectView({ initial }: { initial: Project }) {
 
   const version = p.render_version;
   const media = (file: string) => `/api/media/${p.id}/${version}/${file}`;
-  const waiting = busy || expect !== null;
+  const waiting = busy || (expect !== null && expect !== 'export');
 
   let body: ReactNode;
   if (p.status === 'moderating' || p.status === 'writing_script') {
@@ -167,6 +190,49 @@ export function ProjectView({ initial }: { initial: Project }) {
         ) : (
           <p className="flex items-center gap-2 text-base text-fg-muted"><Check className="size-4 text-accent-text" aria-hidden />{t('project.completed', { credits: p.estimate_credits })}</p>
         )}
+        <section aria-labelledby="formats" className="flex flex-col gap-4 rounded-lg bg-surface-1 p-4 sm:p-6">
+          <div>
+            <h2 id="formats" className="text-md font-semibold text-fg">{t('export.title')}</h2>
+            <p className="mt-1 text-base text-fg-muted">{t('export.body')}</p>
+          </div>
+          <div className="flex flex-wrap gap-2" aria-live="polite">
+            {(['9:16', '1:1'] as const).map((format) => {
+              const ex = p.exports.find((e) => e.format === format);
+              if (ex?.status === 'succeeded') {
+                return <Button key={format} asChild><a href={media(`export-${format.replace(':', 'x')}.mp4`)} download><Download className="size-4" aria-hidden />{t('export.download', { format })}</a></Button>;
+              }
+              const working = ex?.status === 'queued' || ex?.status === 'running';
+              return (
+                <Button key={format} loading={working} disabled={busy} icon={<Crop className="size-4" aria-hidden />}
+                  onClick={() => start(async () => { const r = await requestExport(p.id, version, format); if (r.ok) setExpect('export'); else toast({ title: t('project.action.error'), tone: 'error' }); })}>
+                  {t(working ? 'export.working' : ex?.status === 'failed' ? 'export.failed' : 'export.create', { format })}
+                </Button>
+              );
+            })}
+          </div>
+        </section>
+        {p.package ? (
+          <section aria-labelledby="package" className="flex flex-col gap-6 rounded-lg bg-surface-1 p-4 sm:p-6">
+            <div>
+              <h2 id="package" className="text-md font-semibold text-fg">{t('package.title')}</h2>
+              <p className="mt-1 text-base text-fg-muted">{t('package.body')}</p>
+            </div>
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_1fr]">
+              {p.package.has_thumbnail ? (
+                <a href={media('thumbnail.jpg')} download={`thumbnail-v${version}.jpg`} className="group flex flex-col gap-2" aria-label={t('package.thumbnail.download')}>
+                  {/* eslint-disable-next-line @next/next/no-img-element -- authenticated, per-user media */}
+                  <img src={media('thumbnail.jpg')} alt={t('package.thumbnail')} width={1280} height={720} loading="lazy" className="aspect-video w-full rounded-md bg-surface-2 object-cover" />
+                  <span className="text-sm text-fg-muted group-hover:text-fg">{t('package.thumbnail.download')}</span>
+                </a>
+              ) : null}
+              <div className="flex min-w-0 flex-col gap-6">
+                <Copyable label={t('package.titles')} items={p.package.titles} />
+                <Copyable label={t('package.description')} items={[p.package.description]} />
+                <Copyable label={t('package.tags')} items={[p.package.tags.join(', ')]} />
+              </div>
+            </div>
+          </section>
+        ) : null}
         <div className="flex flex-wrap gap-2">
           <Button asChild><a href={media('download.mp4')} download><Download className="size-4" aria-hidden />{t('project.download')}</a></Button>
           <Button asChild variant="ghost"><a href={media('subtitles.srt')} download={`subtitles-v${version}.srt`}><FileText className="size-4" aria-hidden />{t('project.subtitles')}</a></Button>

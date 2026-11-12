@@ -1,9 +1,11 @@
 # Xen Studio — build progress
 
 Resume rule: continue from the **first unchecked item**. A box is ticked only if the thing was actually run
-and passed; "written, not run" items stay unchecked with a note. Last updated: 2026-11-12.
+and passed; "written, not run" items stay unchecked with a note. Last updated: 2026-11-12 (session 3).
 
 ## Blockers a human must resolve
+- Note on order: the remaining Phase 1 and Phase 2 items need Docker (Kafka, Temporal, MinIO, Helm) or real provider
+  keys, neither of which exists in the build sandbox. They stay unchecked; work continued with items that can be run and verified.
 - [x] "Complete Master Stack" document received (stored at `docs/source/complete-master-stack.pdf`). Phase 1 was
       reconciled against it: plans, schema names, Kafka topics (DECISIONS.md D-023…D-027).
 - [ ] **Link GitHub to Claude** (Settings → Connectors) so the repo `bilalanjum271-cloud/end-to-end-complete-studio`
@@ -122,12 +124,28 @@ File plan: `services/studio/xen_studio/{router,pipeline,api}` (Python) · `infra
 - [ ] Human trust-and-safety queue and appeals; real-person and age rules
 - [ ] OpenAPI export for the studio service (FastAPI serves it at `/docs`); metrics and traces for the Python service
 
-## Phase 3 — Localization and publishing
-- [ ] Multi-language scripts and voices, glossary, review queue, subtitle export
-- [ ] Title / thumbnail / tags generation; 16:9, 9:16, 1:1 exports
-- [ ] Scheduled upload: YouTube, TikTok, Facebook, Instagram (needs developer apps and OAuth credentials)
-- [ ] Notifications: email, push, in-app
-- [ ] Phase 3 e2e
+## Phase 3 — Localization and publishing  (first slice built and verified)
+
+File plan: `infra/db/migrations/0005` · `services/studio` (packaging, export, notify activities; notifications API) ·
+`apps/web` (package panel, formats, notification bell).
+
+### Done and verified
+- [x] Title / description / tags generation and a real thumbnail image with each render (mock LLM, FFmpeg frame + title)
+- [x] Multi-format export: 9:16 and 1:1 from the 16:9 render, background job, idempotent per render and format,
+      centre-crop reframing; verified 720×1280 output
+- [x] Subtitle export (SRT and VTT) — delivered in Phase 2
+- [x] Notifications at script-ready, video-ready, generation-failed and export-ready: in-app feed with unread state,
+      plus email and push through provider interfaces (mock adapters), delivery log per channel, no duplicates on retry
+- [x] UI: publish package with copy buttons and thumbnail download, format buttons, notification bell and drawer
+- [x] Covered by the pipeline end-to-end test and the browser visual suite
+
+### Not built yet (in order)
+- [ ] Localization: per-language script adaptation with glossary, native-speaker review queue, multiple voices per language
+- [ ] Real email (SMTP/provider) and push (FCM/APNs) adapters; notification preferences; templates per locale
+- [ ] Publishing: connect channel (OAuth) and scheduled upload to YouTube, TikTok, Facebook, Instagram behind a
+      provider interface — needs developer apps and credentials for each platform
+- [ ] Subject-aware reframing for vertical formats; burned-in captions for Shorts
+- [ ] Phase 3 e2e covering localization and publishing
 
 ## Phase 4 — Big data layer and Admin dashboard
 - [ ] Events → Iceberg lakehouse; Flink live cost and fraud signals; Spark + dbt aggregates; ClickHouse

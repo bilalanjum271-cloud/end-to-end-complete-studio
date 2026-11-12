@@ -71,6 +71,15 @@ class ScriptToVideoWorkflow:
         self._host.signals.append(("cancel", data))
 
 
+@workflow.defn(name="RunActivity")
+class RunActivityWorkflow:
+    """One retried activity as a workflow: used for exports."""
+
+    @workflow.run
+    async def run(self, name: str, args: list) -> None:
+        await workflow.execute_activity(name, args=args, retry_policy=_RETRY, start_to_close_timeout=timedelta(seconds=1800))
+
+
 class TemporalOrchestrator:
     """Same interface as LocalOrchestrator, backed by a Temporal client. Workflow id = project id (idempotent start)."""
 
@@ -89,3 +98,10 @@ class TemporalOrchestrator:
     async def signal(self, ws: str, pid: str, name: str, data: dict) -> bool:
         await self.client.get_workflow_handle(f"project-{pid}").signal(name, data)
         return True
+
+    async def run_task(self, name: str, *args) -> None:
+        from temporalio.exceptions import WorkflowAlreadyStartedError
+        try:
+            await self.client.start_workflow("RunActivity", args=[name, list(args)], id=f"{name}-{'-'.join(str(a) for a in args)}", task_queue=TASK_QUEUE)
+        except WorkflowAlreadyStartedError:
+            pass

@@ -34,6 +34,7 @@ async def script_to_video(h: Host, ws: str, pid: str) -> str:
         if not await h.act("write_script", ws, pid, ""):
             await h.act("settle_credits", ws, pid, "release", "script blocked by moderation")
             return "blocked"
+        await h.act("notify", ws, pid, "script_ready")
         regenerations = 0
         while True:
             sig = await h.wait_signal(APPROVAL_TIMEOUT_S)
@@ -57,6 +58,8 @@ async def script_to_video(h: Host, ws: str, pid: str) -> str:
             if not await h.act("assemble_render", ws, pid):
                 await h.act("settle_credits", ws, pid, "release", "output blocked by moderation")
                 return "blocked"
+            await h.act("package_render", ws, pid)
+            await h.act("notify", ws, pid, "video_ready")
             while True:
                 sig = await h.wait_signal(REVIEW_TIMEOUT_S)
                 if sig is None or sig[0] == "accept":
@@ -72,6 +75,7 @@ async def script_to_video(h: Host, ws: str, pid: str) -> str:
         if reserved:
             await h.act("settle_credits", ws, pid, "release", "generation failed")
         await h.act("finish", ws, pid, "failed", str(err)[:500])
+        await h.act("notify", ws, pid, "generation_failed")
         return "failed"
 
 

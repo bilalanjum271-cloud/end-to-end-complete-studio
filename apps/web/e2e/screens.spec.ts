@@ -67,6 +67,17 @@ test('signup lands in the app shell; palette, shortcuts, credits, RTL and light 
   }));
   expect(duration).toBeGreaterThan(5);
   await expect(page).toHaveScreenshot('video-review.png', { mask: [page.locator('video')] });
+
+  // Phase 3 slice: publish package, vertical export, notifications
+  await expect(page.getByRole('heading', { name: 'Publish package' })).toBeVisible();
+  await expect(page.getByText('The Truth About the Tunguska event of 1908')).toBeVisible();
+  await page.getByRole('button', { name: 'Create 9:16' }).click();
+  await expect(page.getByRole('link', { name: 'Download 9:16' })).toBeVisible({ timeout: 60_000 });
+  await page.getByRole('button', { name: /^Notifications/ }).click();
+  await expect(page.getByText(/Your video is ready to review/)).toBeVisible();
+  await expect(page.getByText(/Your script is ready to approve/)).toBeVisible();
+  await page.keyboard.press('Escape');
+
   await context.addCookies([{ name: 'xs_locale', value: 'ar', url: baseURL! }, { name: 'xs_theme', value: 'light', url: baseURL! }]);
   await page.goto('/app/credits');
   await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');

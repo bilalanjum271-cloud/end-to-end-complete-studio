@@ -28,4 +28,4 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B"]
-ignore = ["B008", "E702"]  # FastAPI Depends()/Header() defaults; compact test lines
+ignore = ["B008", "E702", "E501"]  # FastAPI Depends()/Header() defaults; compact test lines
