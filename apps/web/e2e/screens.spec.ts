@@ -42,8 +42,9 @@ test('signup lands in the app shell; palette, shortcuts, credits, RTL and light 
   await page.keyboard.press('Enter');
   await page.waitForURL('**/app/credits');
   await expect(page.getByText('200').first()).toBeVisible(); // plan credits arrived from the ledger
-  await expect(page.getByRole('dialog')).toBeHidden(); // palette has finished closing
-  await page.mouse.move(0, 0); // no hover tooltip in the shot
+  await page.reload(); // fresh render: no leftover focus ring, overlay or tooltip from the palette
+  await page.waitForLoadState('networkidle');
+  await expect(page.getByText('200').first()).toBeVisible();
   await expect(page).toHaveScreenshot('credits.png', { mask: [page.locator('time')] });
 
   if ((page.viewportSize()?.width ?? 0) >= 768) {

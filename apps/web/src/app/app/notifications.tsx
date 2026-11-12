@@ -29,9 +29,10 @@ export function NotificationBell() {
 
   const onOpenChange = (next: boolean) => {
     setOpen(next);
+    if (next) void load(); // always show the latest when the drawer opens, not the last poll
     if (next && feed.unread > 0) {
       setFeed((f) => ({ ...f, unread: 0 })); // optimistic
-      void markNotificationsRead();
+      void markNotificationsRead().then(load);
     }
     if (!next) setFeed((f) => ({ ...f, notifications: f.notifications.map((n) => ({ ...n, read: true })) }));
   };
